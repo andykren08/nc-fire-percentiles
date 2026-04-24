@@ -10,12 +10,12 @@ import cartopy.feature as cfeature
 # --- 1. CONFIGURATION & THRESHOLDS ---
 # Red Flag Warning / High Danger Thresholds
 CRITICAL_RH = 25.0       # Percent
-CRITICAL_WIND = 15.0     # MPH
-CRITICAL_GUST = 25.0     # MPH
+CRITICAL_WIND = 20.0     # MPH
+CRITICAL_GUST = 30.0     # MPH
 
 # Define NC Bounding Box
-lat_min, lat_max = 33.5, 36.6
-lon_min, lon_max = -84.5, -75.0
+lat_min, lat_max = 32.0, 38.0
+lon_min, lon_max = -86.5, -73.0
 
 # Set up directories
 os.makedirs('public/images', exist_ok=True)
@@ -72,39 +72,46 @@ def calculate_uncertainty_index(rh_10, rh_90, wind_10, wind_90):
 def ms_to_mph(ms):
     return ms * 2.23694
 
-def generate_prob_plot(plot_data, lats, lons, fhr, scenario, title_text, is_uncertainty=False):
+def generate_prob_plot(plot_data, lats, lons, fhr, scenario, title_text, init_time, is_uncertainty=False):
     fig = plt.figure(figsize=(10, 8))
     ax = plt.axes(projection=ccrs.PlateCarree())
     ax.set_extent([lon_min, lon_max, lat_min, lat_max], crs=ccrs.PlateCarree())
 
-    # Add Map Features (Matching your original script)
+    # Add Map Features
     ax.add_feature(cfeature.STATES, linewidth=1.5, edgecolor='black')
     ax.add_feature(cfeature.COASTLINE, linewidth=1.0)
     
-    # Optional: MetPy Counties (If you want to keep them, ensure MetPy is imported and shapefiles downloaded)
     try:
         from metpy.plots import USCOUNTIES
         ax.add_feature(USCOUNTIES.with_scale('5m'), edgecolor='gray', linewidth=0.5)
     except:
         pass
 
-    # Setup Colors
+    # Setup Colors & Legend Ticks
     if is_uncertainty:
-        # Uncertainty Index: 1 (Low) to 5 (High)
-        cmap = plt.cm.plasma  # Uses a vibrant purple-to-yellow colormap
+        cmap = plt.cm.plasma  
         levels = [0.5, 1.5, 2.5, 3.5, 4.5, 5.5]
+        tick_locs = [1, 2, 3, 4, 5]
+        tick_labels = ['1 (Low)', '2', '3', '4', '5 (High)']
     else:
-        # Fire Danger: 0 (Low), 1 (Elevated), 2 (Critical)
         from matplotlib.colors import ListedColormap
         cmap = ListedColormap(['#A1D99B', '#FEE08B', '#D73027']) # Green, Yellow, Red
         levels = [-0.5, 0.5, 1.5, 2.5]
+        tick_locs = [0, 1, 2]
+        tick_labels = ['Low', 'Elevated', 'Critical']
 
     # Plot the Data
     mesh = ax.pcolormesh(lons, lats, plot_data, cmap=cmap, vmin=levels[0], vmax=levels[-1], transform=ccrs.PlateCarree())
     
-    # Formatting
-    plt.colorbar(mesh, ax=ax, orientation='horizontal', pad=0.05, aspect=50, ticks=[1, 2, 3, 4, 5] if is_uncertainty else [0, 1, 2])
-    plt.title(f"NBM {title_text} - Forecast Hour {fhr:02d}", fontsize=14, fontweight='bold')
+    # Formatting the Colorbar
+    cbar = plt.colorbar(mesh, ax=ax, orientation='horizontal', pad=0.05, aspect=50, ticks=tick_locs)
+    cbar.set_ticklabels(tick_labels)
+    
+    # Calculate and Format the Valid Time
+    valid_time = init_time + timedelta(hours=fhr)
+    valid_time_str = valid_time.strftime("%a %m/%d %H:00Z")
+    
+    plt.title(f"NBM {title_text}\nValid: {valid_time_str} (F{fhr:02d})", fontsize=14, fontweight='bold')
     
     # Save Image
     filename = f"public/images/nbm_{scenario}_fire_danger_f{fhr:02d}.png"
@@ -116,9 +123,13 @@ def generate_prob_plot(plot_data, lats, lons, fhr, scenario, title_text, is_unce
 def process_nbm():
     print("--- Processing NBM Percentiles ---")
     
-    # NBM URLs for NOMADS (Using a simplified core/qmd access pattern)
-    date_str = datetime.utcnow().strftime("%Y%m%d")
-    hour_str = "06" # We'll default to the 06Z run which has all percentiles
+    # NBM Initialization Time
+    now = datetime.utcnow()
+    date_str = now.strftime("%Y%m%d")
+    hour_str = "06" 
+    
+    # Create a real datetime object for the map titles
+    init_time = datetime(now.year, now.month, now.day, int(hour_str), 0)
     
     base_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/blend/prod/blend.{date_str}/{hour_str}/qmd"
     
@@ -149,18 +160,18 @@ def process_nbm():
             rh_90 = np.random.uniform(35, 60, (100, 100))
             wind_90 = np.random.uniform(15, 30, (100, 100))
             
-            # 3. Calculate Scenarios
+           # 3. Calculate Scenarios
             # Worst Case: 10th RH, 90th Wind
             worst_case = calculate_fire_danger(rh_10, wind_90, wind_90)
-            generate_prob_plot(worst_case, lats, lons, fhr, "worst", "Worst-Case Scenario (Low RH / High Wind)")
+            generate_prob_plot(worst_case, lats, lons, fhr, "worst", "Worst-Case Scenario (Low RH / High Wind)", init_time)
             
             # Best Case: 90th RH, 10th Wind
             best_case = calculate_fire_danger(rh_90, wind_10, wind_10)
-            generate_prob_plot(best_case, lats, lons, fhr, "best", "Best-Case Scenario (High RH / Low Wind)")
+            generate_prob_plot(best_case, lats, lons, fhr, "best", "Best-Case Scenario (High RH / Low Wind)", init_time)
             
             # Uncertainty Spread
             uncertainty = calculate_uncertainty_index(rh_10, rh_90, wind_10, wind_90)
-            generate_prob_plot(uncertainty, lats, lons, fhr, "spread", "Forecast Uncertainty Index", is_uncertainty=True)
+            generate_prob_plot(uncertainty, lats, lons, fhr, "spread", "Forecast Uncertainty Index", init_time, is_uncertainty=True)
             
         except Exception as e:
             print(f"Error processing NBM Hour {fhr}: {e}")
