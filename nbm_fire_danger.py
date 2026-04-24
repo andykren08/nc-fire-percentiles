@@ -123,55 +123,78 @@ def generate_prob_plot(plot_data, lats, lons, fhr, scenario, title_text, init_ti
 def process_nbm():
     print("--- Processing NBM Percentiles ---")
     
-    # NBM Initialization Time
+    # NBM Initialization Time (Usually 06Z and 18Z have the full probabilistic suite)
     now = datetime.utcnow()
     date_str = now.strftime("%Y%m%d")
     hour_str = "06" 
     
-    # Create a real datetime object for the map titles
     init_time = datetime(now.year, now.month, now.day, int(hour_str), 0)
     
+    # Base URL for NBM QMD (Quantile Mapping and Dressing) which holds the percentiles
     base_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/blend/prod/blend.{date_str}/{hour_str}/qmd"
     
     for fhr in range(1, 49):
-        # Note: NBM probabilistic variables are usually packed into the 'qmd' or 'core' files depending on the NWS update cycle.
-        # For this setup, we'll simulate the data extraction block using our dummy NOMADS pipeline.
+        file_name = f"blend.t{hour_str}z.qmd.f{fhr:03d}.co.grib2"
+        file_url = f"{base_url}/{file_name}"
         
         try:
-            # 1. Download the file for this hour (Hypothetical grib2 file handling)
-            # file_url = f"{base_url}/blend.t{hour_str}z.qmd.f{fhr:03d}.co.grib2"
-            # ds = xr.open_dataset('downloaded_file.grib2', engine='cfgrib')
+            print(f"Downloading: {file_url}")
+            response = requests.get(file_url, timeout=30)
             
-            # 2. Extract Data (Simulated arrays for testing the logic matrix)
-            # In production, you will pull:
-            # rh_10 = ds['rh10'].values
-            # wind_90 = ds['si10_90'].values, etc.
+            if response.status_code != 200:
+                print(f" -> File not available yet (Status {response.status_code})")
+                continue
+                
+            with open(file_name, 'wb') as f:
+                f.write(response.content)
+                
+            # Open the dataset 
+            # Note: cfgrib handles NBM percentiles via backend_kwargs to separate them
+            ds = xr.open_dataset(file_name, engine='cfgrib', 
+                                 backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround', 'level': 2}})
+            ds_wind = xr.open_dataset(file_name, engine='cfgrib', 
+                                      backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround', 'level': 10}})
+
+            # Extract Lat/Lon grids
+            lats = ds.latitude.values
+            lons = ds.longitude.values
             
-            # --- SIMULATED DATA FOR NOW TO AVOID NOMADS TIMEOUTS DURING BUILD ---
-            lats = np.linspace(lat_max, lat_min, 100)
-            lons = np.linspace(lon_min, lon_max, 100)
-            lon_grid, lat_grid = np.meshgrid(lons, lats)
-            
-            # Simulate 10th Percentile (Dry/Calm)
-            rh_10 = np.random.uniform(15, 30, (100, 100))
-            wind_10 = np.random.uniform(5, 10, (100, 100))
-            
-            # Simulate 90th Percentile (Wet/Windy)
-            rh_90 = np.random.uniform(35, 60, (100, 100))
-            wind_90 = np.random.uniform(15, 30, (100, 100))
-            
-           # 3. Calculate Scenarios
-            # Worst Case: 10th RH, 90th Wind
+            # Extract 10th and 90th Percentile RH (2m)
+            # cfgrib often names NBM percentiles with the percentile in the variable name or coordinate
+            # We will use try/except blocks to catch the exact variable names NBM is using today
+            try:
+                rh_10 = ds['r2_10'].values if 'r2_10' in ds else ds['rh_10'].values
+                rh_90 = ds['r2_90'].values if 'r2_90' in ds else ds['rh_90'].values
+            except KeyError:
+                print("Could not find RH percentiles in this file.")
+                continue
+
+            # Extract 10th and 90th Percentile Wind (10m)
+            try:
+                wind_10_ms = ds_wind['si10_10'].values if 'si10_10' in ds_wind else ds_wind['wspd_10'].values
+                wind_90_ms = ds_wind['si10_90'].values if 'si10_90' in ds_wind else ds_wind['wspd_90'].values
+                
+                # Convert to MPH
+                wind_10 = ms_to_mph(wind_10_ms)
+                wind_90 = ms_to_mph(wind_90_ms)
+            except KeyError:
+                print("Could not find Wind percentiles in this file.")
+                continue
+
+            # 3. Calculate Scenarios
             worst_case = calculate_fire_danger(rh_10, wind_90, wind_90)
             generate_prob_plot(worst_case, lats, lons, fhr, "worst", "Worst-Case Scenario (Low RH / High Wind)", init_time)
             
-            # Best Case: 90th RH, 10th Wind
             best_case = calculate_fire_danger(rh_90, wind_10, wind_10)
             generate_prob_plot(best_case, lats, lons, fhr, "best", "Best-Case Scenario (High RH / Low Wind)", init_time)
             
-            # Uncertainty Spread
             uncertainty = calculate_uncertainty_index(rh_10, rh_90, wind_10, wind_90)
             generate_prob_plot(uncertainty, lats, lons, fhr, "spread", "Forecast Uncertainty Index", init_time, is_uncertainty=True)
+            
+            # Clean up the large GRIB file to save Action server space
+            ds.close()
+            ds_wind.close()
+            os.remove(file_name)
             
         except Exception as e:
             print(f"Error processing NBM Hour {fhr}: {e}")
