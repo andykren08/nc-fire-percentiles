@@ -123,39 +123,44 @@ def generate_prob_plot(plot_data, lats, lons, fhr, scenario, title_text, init_ti
 
 # --- 5. MAIN NBM PROCESSING LOOP ---
 def process_nbm():
-    print("--- Hunting for the Latest Uploaded NBM Cycle ---")
+    print("--- Hunting for the Latest Uploaded NBM Major Cycle ---")
     
     now = datetime.utcnow()
     valid_cycle_found = False
     
-    # Look backwards in time up to 48 hours to find the most recent successful upload
+    # Look backwards in time up to 48 hours
     for hours_back in range(0, 48):
         check_time = now - timedelta(hours=hours_back)
-        cycle_hour = (check_time.hour // 6) * 6
+        cycle_hour = check_time.hour
         
+        # CRITICAL FIX: Only check the Major Probabilistic Cycles
+        if cycle_hour not in [1, 7, 13, 19]:
+            continue
+            
         date_str = check_time.strftime("%Y%m%d")
         hour_str = f"{cycle_hour:02d}"
         
-        # We test Forecast Hour 001 to see if the cycle has started uploading to AWS
+        # Test if this specific Major Cycle has finished uploading to AWS
         test_url = f"https://noaa-nbm-grib2-pds.s3.amazonaws.com/blend.{date_str}/{hour_str}/qmd/blend.t{hour_str}z.qmd.f001.co.grib2"
         
         try:
-            # A 'HEAD' request just checks if the file exists without downloading the massive file
             response = requests.head(test_url, timeout=10)
             if response.status_code == 200:
-                print(f"Success! Locked onto fresh NBM cycle: {date_str} at {hour_str}Z")
+                print(f"Success! Locked onto fresh NBM Major Cycle: {date_str} at {hour_str}Z")
                 valid_cycle_found = True
                 break
         except Exception as e:
-            pass # Ignore connection timeouts during the hunt
+            pass 
 
     if not valid_cycle_found:
-        print("CRITICAL: Could not find any NBM cycles on AWS in the past 48 hours.")
+        print("CRITICAL: Could not find any NBM Major Cycles on AWS in the past 48 hours.")
         return
 
     # Now that we found it, set the official variables
     init_time = datetime(check_time.year, check_time.month, check_time.day, cycle_hour, 0)
     base_url = f"https://noaa-nbm-grib2-pds.s3.amazonaws.com/blend.{date_str}/{hour_str}/qmd"
+    
+    # --- PROCEED WITH DOWNLOADING ---
     
     # --- PROCEED WITH DOWNLOADING ---
     for fhr in range(1, 49):
