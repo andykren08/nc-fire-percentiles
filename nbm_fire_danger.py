@@ -123,7 +123,7 @@ def generate_prob_plot(plot_data, lats, lons, fhr, scenario, title_text, init_ti
 
 # --- 5. MAIN NBM PROCESSING LOOP ---
 def process_nbm():
-    print("--- Hunting for the Latest Uploaded NBM Major Cycle ---")
+    print("--- Hunting for the Latest Uploaded NBM v5.0 Parallel Cycle ---")
     
     now = datetime.utcnow()
     valid_cycle_found = False
@@ -133,20 +133,20 @@ def process_nbm():
         check_time = now - timedelta(hours=hours_back)
         cycle_hour = check_time.hour
         
-        # CRITICAL FIX: Only check the Major Probabilistic Cycles
+        # Check the Major Probabilistic Cycles (01z, 07z, 13z, 19z)
         if cycle_hour not in [1, 7, 13, 19]:
             continue
             
         date_str = check_time.strftime("%Y%m%d")
         hour_str = f"{cycle_hour:02d}"
         
-        # Test if this specific Major Cycle has finished uploading to AWS
-        test_url = f"https://noaa-nbm-grib2-pds.s3.amazonaws.com/blend.{date_str}/{hour_str}/qmd/blend.t{hour_str}z.qmd.f001.co.grib2"
+        # V5.0 PARALLEL BUCKET: Using 'noaa-nbm-para-pds'
+        test_url = f"https://noaa-nbm-para-pds.s3.amazonaws.com/blend.{date_str}/{hour_str}/qmd/blend.t{hour_str}z.qmd.f001.co.grib2"
         
         try:
             response = requests.head(test_url, timeout=10)
             if response.status_code == 200:
-                print(f"Success! Locked onto fresh NBM Major Cycle: {date_str} at {hour_str}Z")
+                print(f"Success! Locked onto fresh NBM v5.0 Major Cycle: {date_str} at {hour_str}Z")
                 valid_cycle_found = True
                 break
         except Exception as e:
@@ -158,7 +158,9 @@ def process_nbm():
 
     # Now that we found it, set the official variables
     init_time = datetime(check_time.year, check_time.month, check_time.day, cycle_hour, 0)
-    base_url = f"https://noaa-nbm-grib2-pds.s3.amazonaws.com/blend.{date_str}/{hour_str}/qmd"
+    
+    # V5.0 PARALLEL BUCKET: Using 'noaa-nbm-para-pds'
+    base_url = f"https://noaa-nbm-para-pds.s3.amazonaws.com/blend.{date_str}/{hour_str}/qmd"
     
     # --- PROCEED WITH DOWNLOADING ---
     
