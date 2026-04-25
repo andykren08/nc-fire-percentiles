@@ -3,6 +3,7 @@ import requests
 import numpy as np
 import xarray as xr
 import cfgrib
+import glob
 from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
@@ -14,7 +15,7 @@ CRITICAL_RH = 25.0       # Percent
 CRITICAL_WIND = 20.0     # MPH
 CRITICAL_GUST = 30.0     # MPH
 
-# Define NC Bounding Box
+# Define NC Bounding Box (Widened for better visual buffer)
 lat_min, lat_max = 32.0, 38.0
 lon_min, lon_max = -86.5, -73.0
 
@@ -135,6 +136,9 @@ def process_nbm():
         file_name = f"blend.t{hour_str}z.qmd.f{fhr:03d}.co.grib2"
         file_url = f"{base_url}/{file_name}"
         
+        # Initialize datasets variable so the finally block doesn't crash if download fails
+        datasets = []
+        
         try:
             print(f"Downloading: {file_url}")
             response = requests.get(file_url, timeout=30)
@@ -146,15 +150,14 @@ def process_nbm():
             with open(file_name, 'wb') as f:
                 f.write(response.content)
                 
-            # Open ALL hypercubes inside the GRIB file (The Silver Bullet method)
+            # Open ALL hypercubes inside the GRIB file
             datasets = cfgrib.open_datasets(file_name)
             
             rh_10 = rh_90 = wind_10 = wind_90 = None
             lats = lons = None
 
-            # Dynamically hunt for the variables across all datasets
+            # Dynamically hunt for the variables
             for d in datasets:
-                # Grab coordinates
                 if lats is None:
                     if 'latitude' in d.coords:
                         lats = d.latitude.values
@@ -164,7 +167,6 @@ def process_nbm():
                         lons = d.lon.values
 
                 for var in d.data_vars:
-                    # Case A: Percentiles are packed into a 3D coordinate/dimension
                     if 'percentile' in d.coords:
                         if var in ['r2', 'rh', '2r']:
                             try:
@@ -176,32 +178,23 @@ def process_nbm():
                                 wind_10 = d[var].sel(percentile=10).values
                                 wind_90 = d[var].sel(percentile=90).values
                             except: pass
-                            
-                    # Case B: Percentiles are baked directly into the variable name
                     else:
                         if var in ['r2_10', 'rh_10', '2r_10']: rh_10 = d[var].values
                         if var in ['r2_90', 'rh_90', '2r_90']: rh_90 = d[var].values
                         if var in ['si10_10', 'wspd_10', '10si_10']: wind_10 = d[var].values
                         if var in ['si10_90', 'wspd_90', '10si_90']: wind_90 = d[var].values
 
-            # Verify we found the data before doing math
             if rh_10 is None or rh_90 is None:
                 print(f" -> Could not find RH percentiles for Hour {fhr}")
-                for d in datasets: d.close()
-                os.remove(file_name)
                 continue
                 
             if wind_10 is None or wind_90 is None:
                 print(f" -> Could not find Wind percentiles for Hour {fhr}")
-                for d in datasets: d.close()
-                os.remove(file_name)
                 continue
 
-            # Convert Winds to MPH
             wind_10 = ms_to_mph(wind_10)
             wind_90 = ms_to_mph(wind_90)
 
-            # 3. Calculate Scenarios
             worst_case = calculate_fire_danger(rh_10, wind_90, wind_90)
             generate_prob_plot(worst_case, lats, lons, fhr, "worst", "Worst-Case Scenario (Low RH / High Wind)", init_time)
             
@@ -211,12 +204,20 @@ def process_nbm():
             uncertainty = calculate_uncertainty_index(rh_10, rh_90, wind_10, wind_90)
             generate_prob_plot(uncertainty, lats, lons, fhr, "spread", "Forecast Uncertainty Index", init_time, is_uncertainty=True)
             
-            # Clean up Memory
-            for d in datasets: d.close()
-            os.remove(file_name)
-            
         except Exception as e:
             print(f"Error processing NBM Hour {fhr}: {e}")
+            
+        finally:
+            # THIS IS THE MAGIC FIX: Runs no matter what!
+            # 1. Force close any datasets that successfully opened
+            for d in datasets:
+                try: d.close()
+                except: pass
+                
+            # 2. Nuke the GRIB file and any hidden .idx files
+            for junk_file in glob.glob(f"{file_name}*"):
+                try: os.remove(junk_file)
+                except: pass
 
 if __name__ == "__main__":
     process_nbm()
