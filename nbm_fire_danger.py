@@ -127,9 +127,9 @@ def process_nbm():
     
     # NBM QMD (probabilistic) runs happen at 00Z, 06Z, 12Z, and 18Z.
     # It takes about 2.5 hours for them to fully upload to NOMADS. 
-    # Subtract 3 hours from current time to ensure we look for a FINISHED run.
+    # Subtract 4 hours from current time to ensure we look for a FINISHED run.
     now = datetime.utcnow()
-    safe_time = now - timedelta(hours=3)
+    safe_time = now - timedelta(hours=4)
     
     # Round down to the nearest 00, 06, 12, or 18 cycle
     cycle_hour = (safe_time.hour // 6) * 6
@@ -152,7 +152,10 @@ def process_nbm():
         
         try:
             print(f"Downloading: {file_url}")
-            response = requests.get(file_url, timeout=30)
+            
+            # NOAA requires a User-Agent to accept the connection
+            headers = {'User-Agent': 'NC-Forest-Service-Probabilistic-App'}
+            response = requests.get(file_url, headers=headers, timeout=30)
             
             if response.status_code != 200:
                 print(f" -> File not available yet (Status {response.status_code})")
