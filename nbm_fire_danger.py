@@ -125,11 +125,22 @@ def generate_prob_plot(plot_data, lats, lons, fhr, scenario, title_text, init_ti
 def process_nbm():
     print("--- Processing NBM Percentiles ---")
     
+    # NBM QMD (probabilistic) runs happen at 00Z, 06Z, 12Z, and 18Z.
+    # It takes about 2.5 hours for them to fully upload to NOMADS. 
+    # Subtract 3 hours from current time to ensure we look for a FINISHED run.
     now = datetime.utcnow()
-    date_str = now.strftime("%Y%m%d")
-    hour_str = "06" 
+    safe_time = now - timedelta(hours=3)
     
-    init_time = datetime(now.year, now.month, now.day, int(hour_str), 0)
+    # Round down to the nearest 00, 06, 12, or 18 cycle
+    cycle_hour = (safe_time.hour // 6) * 6
+    
+    date_str = safe_time.strftime("%Y%m%d")
+    hour_str = f"{cycle_hour:02d}"
+    
+    init_time = datetime(safe_time.year, safe_time.month, safe_time.day, cycle_hour, 0)
+    
+    print(f"Current UTC: {now.strftime('%H:%Mz')} | Targeting NBM Cycle: {date_str} at {hour_str}Z")
+    
     base_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/blend/prod/blend.{date_str}/{hour_str}/qmd"
     
     for fhr in range(1, 49):
