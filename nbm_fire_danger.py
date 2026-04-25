@@ -2,6 +2,7 @@ import os
 import requests
 import numpy as np
 import xarray as xr
+import cfgrib
 from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
@@ -123,14 +124,11 @@ def generate_prob_plot(plot_data, lats, lons, fhr, scenario, title_text, init_ti
 def process_nbm():
     print("--- Processing NBM Percentiles ---")
     
-    # NBM Initialization Time (Usually 06Z and 18Z have the full probabilistic suite)
     now = datetime.utcnow()
     date_str = now.strftime("%Y%m%d")
     hour_str = "06" 
     
     init_time = datetime(now.year, now.month, now.day, int(hour_str), 0)
-    
-    # Base URL for NBM QMD (Quantile Mapping and Dressing) which holds the percentiles
     base_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/blend/prod/blend.{date_str}/{hour_str}/qmd"
     
     for fhr in range(1, 49):
@@ -148,38 +146,60 @@ def process_nbm():
             with open(file_name, 'wb') as f:
                 f.write(response.content)
                 
-            # Open the dataset 
-            # Note: cfgrib handles NBM percentiles via backend_kwargs to separate them
-            ds = xr.open_dataset(file_name, engine='cfgrib', 
-                                 backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround', 'level': 2}})
-            ds_wind = xr.open_dataset(file_name, engine='cfgrib', 
-                                      backend_kwargs={'filter_by_keys': {'typeOfLevel': 'heightAboveGround', 'level': 10}})
-
-            # Extract Lat/Lon grids
-            lats = ds.latitude.values
-            lons = ds.longitude.values
+            # Open ALL hypercubes inside the GRIB file (The Silver Bullet method)
+            datasets = cfgrib.open_datasets(file_name)
             
-            # Extract 10th and 90th Percentile RH (2m)
-            # cfgrib often names NBM percentiles with the percentile in the variable name or coordinate
-            # We will use try/except blocks to catch the exact variable names NBM is using today
-            try:
-                rh_10 = ds['r2_10'].values if 'r2_10' in ds else ds['rh_10'].values
-                rh_90 = ds['r2_90'].values if 'r2_90' in ds else ds['rh_90'].values
-            except KeyError:
-                print("Could not find RH percentiles in this file.")
+            rh_10 = rh_90 = wind_10 = wind_90 = None
+            lats = lons = None
+
+            # Dynamically hunt for the variables across all datasets
+            for d in datasets:
+                # Grab coordinates
+                if lats is None:
+                    if 'latitude' in d.coords:
+                        lats = d.latitude.values
+                        lons = d.longitude.values
+                    elif 'lat' in d.coords:
+                        lats = d.lat.values
+                        lons = d.lon.values
+
+                for var in d.data_vars:
+                    # Case A: Percentiles are packed into a 3D coordinate/dimension
+                    if 'percentile' in d.coords:
+                        if var in ['r2', 'rh', '2r']:
+                            try:
+                                rh_10 = d[var].sel(percentile=10).values
+                                rh_90 = d[var].sel(percentile=90).values
+                            except: pass
+                        if var in ['si10', 'wspd', '10si', 'wind', 'gust']:
+                            try:
+                                wind_10 = d[var].sel(percentile=10).values
+                                wind_90 = d[var].sel(percentile=90).values
+                            except: pass
+                            
+                    # Case B: Percentiles are baked directly into the variable name
+                    else:
+                        if var in ['r2_10', 'rh_10', '2r_10']: rh_10 = d[var].values
+                        if var in ['r2_90', 'rh_90', '2r_90']: rh_90 = d[var].values
+                        if var in ['si10_10', 'wspd_10', '10si_10']: wind_10 = d[var].values
+                        if var in ['si10_90', 'wspd_90', '10si_90']: wind_90 = d[var].values
+
+            # Verify we found the data before doing math
+            if rh_10 is None or rh_90 is None:
+                print(f" -> Could not find RH percentiles for Hour {fhr}")
+                for d in datasets: d.close()
+                os.remove(file_name)
+                continue
+                
+            if wind_10 is None or wind_90 is None:
+                print(f" -> Could not find Wind percentiles for Hour {fhr}")
+                for d in datasets: d.close()
+                os.remove(file_name)
                 continue
 
-            # Extract 10th and 90th Percentile Wind (10m)
-            try:
-                wind_10_ms = ds_wind['si10_10'].values if 'si10_10' in ds_wind else ds_wind['wspd_10'].values
-                wind_90_ms = ds_wind['si10_90'].values if 'si10_90' in ds_wind else ds_wind['wspd_90'].values
-                
-                # Convert to MPH
-                wind_10 = ms_to_mph(wind_10_ms)
-                wind_90 = ms_to_mph(wind_90_ms)
-            except KeyError:
-                print("Could not find Wind percentiles in this file.")
-                continue
+            # Convert Winds to MPH
+            wind_10 = ms_to_mph(wind_10)
+            wind_90 = ms_to_mph(wind_90)
 
             # 3. Calculate Scenarios
             worst_case = calculate_fire_danger(rh_10, wind_90, wind_90)
@@ -191,9 +211,8 @@ def process_nbm():
             uncertainty = calculate_uncertainty_index(rh_10, rh_90, wind_10, wind_90)
             generate_prob_plot(uncertainty, lats, lons, fhr, "spread", "Forecast Uncertainty Index", init_time, is_uncertainty=True)
             
-            # Clean up the large GRIB file to save Action server space
-            ds.close()
-            ds_wind.close()
+            # Clean up Memory
+            for d in datasets: d.close()
             os.remove(file_name)
             
         except Exception as e:
