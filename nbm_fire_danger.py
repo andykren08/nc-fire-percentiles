@@ -141,7 +141,8 @@ def process_nbm():
     
     print(f"Current UTC: {now.strftime('%H:%Mz')} | Targeting NBM Cycle: {date_str} at {hour_str}Z")
     
-    base_url = f"https://nomads.ncep.noaa.gov/pub/data/nccf/com/blend/prod/blend.{date_str}/{hour_str}/qmd"
+    # AWS Open Data Registry (No rate limits, no firewalls, no IP blocks)
+    base_url = f"https://noaa-nbm-grib2-pds.s3.amazonaws.com/blend.{date_str}/{hour_str}/qmd"
     
     for fhr in range(1, 49):
         file_name = f"blend.t{hour_str}z.qmd.f{fhr:03d}.co.grib2"
@@ -153,9 +154,7 @@ def process_nbm():
         try:
             print(f"Downloading: {file_url}")
             
-            # NOAA requires a User-Agent to accept the connection
-            headers = {'User-Agent': 'NC-Forest-Service-Probabilistic-App'}
-            response = requests.get(file_url, headers=headers, timeout=30)
+            response = requests.get(file_url, timeout=30)
             
             if response.status_code != 200:
                 print(f" -> File not available yet (Status {response.status_code})")
