@@ -126,10 +126,9 @@ def process_nbm():
     print("--- Processing NBM Percentiles ---")
     
     # NBM QMD (probabilistic) runs happen at 00Z, 06Z, 12Z, and 18Z.
-    # It takes about 2.5 hours for them to fully upload to NOMADS. 
-    # Subtract 4 hours from current time to ensure we look for a FINISHED run.
+    # Subtract 6 hours from current time to guarantee all QMD files are fully uploaded
     now = datetime.utcnow()
-    safe_time = now - timedelta(hours=4)
+    safe_time = now - timedelta(hours=6)
     
     # Round down to the nearest 00, 06, 12, or 18 cycle
     cycle_hour = (safe_time.hour // 6) * 6
