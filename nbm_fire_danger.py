@@ -123,36 +123,49 @@ def generate_prob_plot(plot_data, lats, lons, fhr, scenario, title_text, init_ti
 
 # --- 5. MAIN NBM PROCESSING LOOP ---
 def process_nbm():
-    print("--- Processing NBM Percentiles ---")
+    print("--- Hunting for the Latest Uploaded NBM Cycle ---")
     
-    # NBM QMD (probabilistic) runs happen at 00Z, 06Z, 12Z, and 18Z.
-    # Subtract 6 hours from current time to guarantee all QMD files are fully uploaded
     now = datetime.utcnow()
-    safe_time = now - timedelta(hours=6)
+    valid_cycle_found = False
     
-    # Round down to the nearest 00, 06, 12, or 18 cycle
-    cycle_hour = (safe_time.hour // 6) * 6
-    
-    date_str = safe_time.strftime("%Y%m%d")
-    hour_str = f"{cycle_hour:02d}"
-    
-    init_time = datetime(safe_time.year, safe_time.month, safe_time.day, cycle_hour, 0)
-    
-    print(f"Current UTC: {now.strftime('%H:%Mz')} | Targeting NBM Cycle: {date_str} at {hour_str}Z")
-    
-    # AWS Open Data Registry (No rate limits, no firewalls, no IP blocks)
+    # Look backwards in time up to 48 hours to find the most recent successful upload
+    for hours_back in range(0, 48):
+        check_time = now - timedelta(hours=hours_back)
+        cycle_hour = (check_time.hour // 6) * 6
+        
+        date_str = check_time.strftime("%Y%m%d")
+        hour_str = f"{cycle_hour:02d}"
+        
+        # We test Forecast Hour 001 to see if the cycle has started uploading to AWS
+        test_url = f"https://noaa-nbm-grib2-pds.s3.amazonaws.com/blend.{date_str}/{hour_str}/qmd/blend.t{hour_str}z.qmd.f001.co.grib2"
+        
+        try:
+            # A 'HEAD' request just checks if the file exists without downloading the massive file
+            response = requests.head(test_url, timeout=10)
+            if response.status_code == 200:
+                print(f"Success! Locked onto fresh NBM cycle: {date_str} at {hour_str}Z")
+                valid_cycle_found = True
+                break
+        except Exception as e:
+            pass # Ignore connection timeouts during the hunt
+
+    if not valid_cycle_found:
+        print("CRITICAL: Could not find any NBM cycles on AWS in the past 48 hours.")
+        return
+
+    # Now that we found it, set the official variables
+    init_time = datetime(check_time.year, check_time.month, check_time.day, cycle_hour, 0)
     base_url = f"https://noaa-nbm-grib2-pds.s3.amazonaws.com/blend.{date_str}/{hour_str}/qmd"
     
+    # --- PROCEED WITH DOWNLOADING ---
     for fhr in range(1, 49):
         file_name = f"blend.t{hour_str}z.qmd.f{fhr:03d}.co.grib2"
         file_url = f"{base_url}/{file_name}"
         
-        # Initialize datasets variable so the finally block doesn't crash if download fails
         datasets = []
         
         try:
             print(f"Downloading: {file_url}")
-            
             response = requests.get(file_url, timeout=30)
             
             if response.status_code != 200:
@@ -162,13 +175,11 @@ def process_nbm():
             with open(file_name, 'wb') as f:
                 f.write(response.content)
                 
-            # Open ALL hypercubes inside the GRIB file
             datasets = cfgrib.open_datasets(file_name)
             
             rh_10 = rh_90 = wind_10 = wind_90 = None
             lats = lons = None
 
-            # Dynamically hunt for the variables
             for d in datasets:
                 if lats is None:
                     if 'latitude' in d.coords:
@@ -220,13 +231,10 @@ def process_nbm():
             print(f"Error processing NBM Hour {fhr}: {e}")
             
         finally:
-            # THIS IS THE MAGIC FIX: Runs no matter what!
-            # 1. Force close any datasets that successfully opened
             for d in datasets:
                 try: d.close()
                 except: pass
                 
-            # 2. Nuke the GRIB file and any hidden .idx files
             for junk_file in glob.glob(f"{file_name}*"):
                 try: os.remove(junk_file)
                 except: pass
