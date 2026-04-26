@@ -246,10 +246,18 @@ def process_nbm():
             generate_prob_plot(best_case, lats, lons, day, "best", "Best-Case Scenario (High RH / Low Wind)", init_time, fhr)
 
         # --- AUTOMATED DSS BULLETIN LOGIC ---
-            # Define the valid_time so the DSS logic knows what day it is!
-            valid_time = init_time + timedelta(hours=fhr)
-            max_median = np.max(median_case)
-            max_worst = np.max(worst_case)
+            valid_time = init_time + timedelta(hours=fhr) 
+            
+            # Convert NBM 0-360 longitudes to -180 to 180 standard format
+            lons_180 = np.where(lons > 180, lons - 360, lons)
+            
+            # Create a geographic "cookie cutter" for the NC Domain
+            nc_mask = (lats >= lat_min) & (lats <= lat_max) & (lons_180 >= lon_min) & (lons_180 <= lon_max)
+            
+            # ONLY search for the maximum threat level inside North Carolina
+            max_median = np.max(median_case[nc_mask])
+            max_worst = np.max(worst_case[nc_mask])
+            
             day_name = valid_time.strftime('%A, %b %d')
 
             if max_median == 3:
