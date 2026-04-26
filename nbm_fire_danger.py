@@ -10,22 +10,41 @@ import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 
 # --- 1. CONFIGURATION & THRESHOLDS ---
+# NC Red Flag Warning Criteria
 CRITICAL_RH = 25.0       # Percent
-CRITICAL_WIND = 15.0     # MPH
-CRITICAL_GUST = 25.0     # MPH
+CRITICAL_WIND = 20.0     # MPH
+CRITICAL_GUST = 30.0     # MPH
+
+# NC Increased Fire Danger (Elevated) Criteria
+ELEVATED_RH = 30.0       # Percent
+ELEVATED_GUST = 25.0     # MPH
 
 lat_min, lat_max = 33.0, 37.5
 lon_min, lon_max = -85.5, -74.5
 
+import os
+import numpy as np
 os.makedirs('public/images', exist_ok=True)
 
 # --- 2. FIRE DANGER MATH ---
 def calculate_fire_danger(rh, wind, gust):
+    """
+    0 = Low
+    1 = Elevated (Increased Fire Danger Statement criteria)
+    2 = Critical (Red Flag Warning criteria)
+    """
     danger_grid = np.zeros_like(rh, dtype=int)
-    elevated_mask = (rh <= CRITICAL_RH + 5) & ((wind >= CRITICAL_WIND - 5) | (gust >= CRITICAL_GUST - 5))
+    
+    # 1. Apply Elevated Danger (IFD)
+    # RH <= 30% AND Gusts >= 25 mph
+    elevated_mask = (rh <= ELEVATED_RH) & (gust >= ELEVATED_GUST)
     danger_grid[elevated_mask] = 1
+    
+    # 2. Apply Critical Danger (Red Flag Warning)
+    # Overwrites with 2 if RH <= 25% AND (Sustained >= 20 OR Gusts >= 30)
     critical_mask = (rh <= CRITICAL_RH) & ((wind >= CRITICAL_WIND) | (gust >= CRITICAL_GUST))
     danger_grid[critical_mask] = 2
+    
     return danger_grid
 
 def calculate_uncertainty_index(rh_10, rh_90, wind_10, wind_90):
