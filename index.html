@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NC Probabilistic Fire Weather</title>
+    <title>NC 7-Day Strategic Fire Weather</title>
     <style>
         body { font-family: Arial, sans-serif; text-align: center; background-color: #f4f4f4; margin: 0; padding: 20px; }
         h1 { color: #333; margin-bottom: 5px; }
@@ -20,18 +20,18 @@
 </head>
 <body>
 
-    <h1>NC Probabilistic Fire Weather (NBM)</h1>
-    <p>Exploring Best-Case, Worst-Case, and Forecast Uncertainty scenarios.</p>
+    <h1>NC 7-Day Strategic Fire Weather (NBM)</h1>
+    <p>Daily Peak Fire Danger: Worst-Case, Best-Case, and Forecast Uncertainty</p>
 
     <div class="controls">
         <select id="modelSelect">
-            <option value="worst">Worst-Case Scenario (Dry & Windy)</option>
-            <option value="best">Best-Case Scenario (Humid & Calm)</option>
+            <option value="worst">Worst-Case Scenario (Low Min RH / High Max Wind)</option>
+            <option value="best">Best-Case Scenario (High Min RH / Low Max Wind)</option>
             <option value="spread">Forecast Uncertainty Index</option>
         </select>
         
-        <button onclick="changeHour(-1)">&#10094; Prev</button>
-        <button onclick="changeHour(1)">Next &#10095;</button>
+        <button onclick="changeDay(-1)">&#10094; Prev Day</button>
+        <button onclick="changeDay(1)">Next Day &#10095;</button>
     </div>
 
     <div class="viewer-container">
@@ -40,18 +40,17 @@
         <div id="statusText">Loading...</div>
     </div>
     
-    <p class="instructions">Tip: You can use the <strong>Left</strong> and <strong>Right</strong> arrow keys on your keyboard to navigate.</p>
+    <p class="instructions">Tip: You can use the <strong>Left</strong> and <strong>Right</strong> arrow keys to navigate through the week.</p>
 
     <script>
-        let currentHour = 1;
-        const maxHour = 48;
+        let currentDay = 1;
+        const maxDay = 7;
         let skipDirection = 1; 
         let skipAttempts = 0;  
 
         function updateImage() {
             const scenario = document.getElementById("modelSelect").value;
             const scenarioText = document.getElementById("modelSelect").options[document.getElementById("modelSelect").selectedIndex].text;
-            const fhr = currentHour.toString().padStart(2, '0'); 
             
             const imgElement = document.getElementById("mapImage");
             const statusElement = document.getElementById("statusText");
@@ -63,61 +62,48 @@
             const timestamp = new Date().getTime();
             
             let basePath = window.location.pathname;
-            if (!basePath.endsWith('/')) {
-                basePath += '/';
-            }
+            if (!basePath.endsWith('/')) { basePath += '/'; }
             
-            // Reconstructs the NBM filename: public/images/nbm_worst_fire_danger_f01.png
-            imgElement.src = `${basePath}public/images/nbm_${scenario}_fire_danger_f${fhr}.png?v=${timestamp}`;
-            statusElement.innerText = `${scenarioText} - Forecast Hour ${fhr}`;
+            imgElement.src = `${basePath}public/images/nbm_${scenario}_fire_danger_day${currentDay}.png?v=${timestamp}`;
+            statusElement.innerText = `${scenarioText} - Forecast Day ${currentDay}`;
         }
 
-        function changeHour(step) {
+        function changeDay(step) {
             skipDirection = step; 
             skipAttempts = 0;     
             
-            currentHour += step;
-            if (currentHour > maxHour) currentHour = 1;
-            if (currentHour < 1) currentHour = maxHour;
+            currentDay += step;
+            if (currentDay > maxDay) currentDay = 1;
+            if (currentDay < 1) currentDay = maxDay;
             
             updateImage();
         }
 
         function handleMissingImage() {
             skipAttempts++;
-            
-            if (skipAttempts < maxHour) {
-                currentHour += skipDirection;
-                
-                if (currentHour > maxHour) currentHour = 1;
-                if (currentHour < 1) currentHour = maxHour;
-                
+            if (skipAttempts < maxDay) {
+                currentDay += skipDirection;
+                if (currentDay > maxDay) currentDay = 1;
+                if (currentDay < 1) currentDay = maxDay;
                 updateImage();
             } else {
-                const imgElement = document.getElementById("mapImage");
-                const errorBox = document.getElementById("errorBox");
-                const statusElement = document.getElementById("statusText");
-                
-                imgElement.style.display = "none";
-                errorBox.style.display = "block";
-                statusElement.innerText = "Data Not Found";
+                document.getElementById("mapImage").style.display = "none";
+                document.getElementById("errorBox").style.display = "block";
+                document.getElementById("statusText").innerText = "Data Not Found";
             }
         }
 
         document.getElementById("modelSelect").addEventListener("change", function() {
-            currentHour = 1;
-            skipDirection = 1;
-            skipAttempts = 0;
+            currentDay = 1; skipDirection = 1; skipAttempts = 0;
             updateImage();
         });
 
         document.addEventListener('keydown', function(event) {
-            if (event.key === "ArrowRight") changeHour(1);
-            else if (event.key === "ArrowLeft") changeHour(-1);
+            if (event.key === "ArrowRight") changeDay(1);
+            else if (event.key === "ArrowLeft") changeDay(-1);
         });
 
         window.onload = updateImage;
     </script>
-
 </body>
 </html>
