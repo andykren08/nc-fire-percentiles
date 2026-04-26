@@ -58,6 +58,10 @@ def ms_to_mph(ms):
 
 # --- 3. MAPPING ---
 def generate_prob_plot(plot_data, lats, lons, day, scenario, title_text, init_time, fhr):
+    # Import PIL for image compositing (must be imported within the function)
+    from PIL import Image
+    import PIL.ImageOps
+
     fig = plt.figure(figsize=(10, 8))
     ax = plt.axes(projection=ccrs.PlateCarree())
     ax.set_extent([lon_min, lon_max, lat_min, lat_max], crs=ccrs.PlateCarree())
@@ -83,9 +87,9 @@ def generate_prob_plot(plot_data, lats, lons, day, scenario, title_text, init_ti
     cbar.set_ticklabels(tick_labels)
     
     valid_time = init_time + timedelta(hours=fhr)
-    plt.title(f"NBM {title_text}\nValid Peak Heating: {valid_time.strftime('%a %m/%d %H:00Z')} (Day {day})", fontsize=14, fontweight='bold')
+    plt.title(f" {title_text}\nValid Peak Heating: {valid_time.strftime('%a %m/%d %H:00Z')} (Day {day})", fontsize=14, fontweight='bold')
     
-    # --- NEW: Burn the threshold legend directly into the image ---
+    # Burn the threshold legend directly into the image
     legend_text = (
         "Threshold Criteria:\n\n"
         "High (RFW):\nRH <= 25% AND\n(Wind >= 20 or Gust >= 30 mph)\n\n"
@@ -98,11 +102,53 @@ def generate_prob_plot(plot_data, lats, lons, day, scenario, title_text, init_ti
             verticalalignment='center',
             bbox=dict(boxstyle='round,pad=0.8', facecolor='#f8f9fa', edgecolor='gray', alpha=0.9))
     
-    # 'bbox_inches=tight' automatically expands the saved image to fit the new text box
-    filename = f"public/images/nbm_{scenario}_fire_danger_day{day}.png"
-    plt.savefig(filename, bbox_inches='tight', dpi=150)
+    # Define filenames for the intermediate and final images
+    temp_filename = f"base_fire_danger_plot.png"
+    final_filename = f"public/images/nbm_{scenario}_fire_danger_day{day}.png"
+
+    # Step 1: Save the initial plot with all its legends.
+    # 'bbox_inches=tight' handles the dynamic text legend width.
+    plt.savefig(temp_filename, bbox_inches='tight', dpi=150)
     plt.close()
 
+    # Step 2: Composite the logo after the plot is rendered.
+    try:
+        # Load the saved plot and the logo
+        base_image = Image.open(temp_filename)
+        # Using the filename of the provided logo
+        logo = Image.open('image_0.png')
+        logo = logo.convert("RGBA") # Ensure alpha transparency is correct
+
+        # Scale the logo. Let's aim for ~200 pixels tall to match the title.
+        logo_height = 200
+        aspect_ratio = logo.size[0] / logo.size[1]
+        logo_width = int(logo_height * aspect_ratio)
+        scaled_logo = logo.resize((logo_width, logo_height))
+
+        # Calculate position for top-right of the visual plot area.
+        # base_image.size gives the width and height of the saved plot.
+        # We place it with a 20px padding from the top edge.
+        logo_x = base_image.size[0] - scaled_logo.size[0] - 20
+        logo_y = 20 
+
+        # Paste the scaled logo over the base image, using the alpha channel as a mask
+        base_image.paste(scaled_logo, (logo_x, logo_y), scaled_logo)
+
+        # Step 3: Save the final composited image to its official location.
+        base_image.save(final_filename)
+
+    except FileNotFoundError:
+        print(f"CRITICAL: Logo file (image_0.png) not found in directory.")
+        # Fallback to saving without logo if needed
+        os.rename(temp_filename, final_filename)
+    except Exception as e:
+        print(f"Error compositing logo: {e}")
+        os.rename(temp_filename, final_filename)
+    finally:
+        # Cleanup the temporary base image
+        if os.path.exists(temp_filename):
+            os.remove(temp_filename)
+            
 # --- 4. MAIN PROCESSING LOOP ---
 def process_nbm():
     print("--- Hunting for NBM Core Cycles (7-Day Strategic Outlook) ---")
