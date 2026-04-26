@@ -246,6 +246,8 @@ def process_nbm():
             generate_prob_plot(best_case, lats, lons, day, "best", "Best-Case Scenario (High RH / Low Wind)", init_time, fhr)
 
         # --- AUTOMATED DSS BULLETIN LOGIC ---
+            # Define the valid_time so the DSS logic knows what day it is!
+            valid_time = init_time + timedelta(hours=fhr)
             max_median = np.max(median_case)
             max_worst = np.max(worst_case)
             day_name = valid_time.strftime('%A, %b %d')
