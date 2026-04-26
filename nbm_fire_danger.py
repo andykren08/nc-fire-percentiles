@@ -24,11 +24,9 @@ LOW_RH = 35.0
 LOW_WIND = 15.0
 LOW_GUST = 20.0
 
-lat_min, lat_max = 33.0, 37.5
-lon_min, lon_max = -85.5, -74.5
+lat_min, lat_max = 31.0, 39.5
+lon_min, lon_max = -87.5, -72.5
 
-import os
-import numpy as np
 os.makedirs('public/images', exist_ok=True)
 
 # --- 2. FIRE DANGER MATH ---
@@ -55,34 +53,11 @@ def calculate_fire_danger(rh, wind, gust):
     
     return danger_grid
 
-def calculate_uncertainty_index(rh_10, rh_90, wind_10, wind_90):
-    rh_spread = np.abs(rh_90 - rh_10)
-    wind_spread = np.abs(wind_90 - wind_10)
-    
-    rh_score = np.ones_like(rh_spread, dtype=int)
-    rh_score[rh_spread >= 10] = 2
-    rh_score[rh_spread >= 20] = 3
-    rh_score[rh_spread >= 30] = 4
-    rh_score[rh_spread >= 40] = 5
-    
-    wind_score = np.ones_like(wind_spread, dtype=int)
-    wind_score[wind_spread >= 5] = 2
-    wind_score[wind_score >= 10] = 3
-    wind_score[wind_spread >= 15] = 4
-    wind_score[wind_spread >= 20] = 5
-    
-    return np.ceil((rh_score + wind_score) / 2.0).astype(int)
-
 def ms_to_mph(ms):
     return ms * 2.23694
 
 # --- 3. MAPPING ---
-def generate_prob_plot(plot_data, lats, lons, day, scenario, title_text, init_time, fhr, is_uncertainty=False):
-    import matplotlib.pyplot as plt
-    import cartopy.crs as ccrs
-    import cartopy.feature as cfeature
-    from datetime import timedelta
-    
+def generate_prob_plot(plot_data, lats, lons, day, scenario, title_text, init_time, fhr):
     fig = plt.figure(figsize=(10, 8))
     ax = plt.axes(projection=ccrs.PlateCarree())
     ax.set_extent([lon_min, lon_max, lat_min, lat_max], crs=ccrs.PlateCarree())
@@ -95,18 +70,12 @@ def generate_prob_plot(plot_data, lats, lons, day, scenario, title_text, init_ti
         ax.add_feature(USCOUNTIES.with_scale('5m'), edgecolor='gray', linewidth=0.5)
     except: pass
 
-    if is_uncertainty:
-        cmap = plt.cm.plasma  
-        levels = [0.5, 1.5, 2.5, 3.5, 4.5, 5.5]
-        tick_locs = [1, 2, 3, 4, 5]
-        tick_labels = ['1 (Low)', '2', '3', '4', '5 (High)']
-    else:
-        from matplotlib.colors import ListedColormap
-        # Updated to 4 colors: Green, Yellow, Orange, Red
-        cmap = ListedColormap(['#A1D99B', '#FEE08B', '#FDAE61', '#D73027']) 
-        levels = [-0.5, 0.5, 1.5, 2.5, 3.5]
-        tick_locs = [0, 1, 2, 3]
-        tick_labels = ['None', 'Low', 'Mod (IFD)', 'High (RFW)']
+    from matplotlib.colors import ListedColormap
+    # 4 colors: Green, Yellow, Orange, Red
+    cmap = ListedColormap(['#A1D99B', '#FEE08B', '#FDAE61', '#D73027']) 
+    levels = [-0.5, 0.5, 1.5, 2.5, 3.5]
+    tick_locs = [0, 1, 2, 3]
+    tick_labels = ['None', 'Low', 'Mod (IFD)', 'High (RFW)']
 
     mesh = ax.pcolormesh(lons, lats, plot_data, cmap=cmap, vmin=levels[0], vmax=levels[-1], transform=ccrs.PlateCarree())
     
@@ -133,7 +102,6 @@ def process_nbm():
         date_str = check_time.strftime("%Y%m%d")
         hour_str = f"{cycle_hour:02d}"
         
-        # Test an hourly core file to ensure the run is available
         test_url = f"https://noaa-nbm-grib2-pds.s3.amazonaws.com/blend.{date_str}/{hour_str}/core/blend.t{hour_str}z.core.f012.co.grib2"
         
         try:
@@ -150,11 +118,9 @@ def process_nbm():
     init_time = datetime(check_time.year, check_time.month, check_time.day, cycle_hour, 0)
     base_url = f"https://noaa-nbm-grib2-pds.s3.amazonaws.com/blend.{date_str}/{hour_str}/core"
     
-    # Calculate the Forecast Hour that matches 21:00 UTC (4-5 PM EST Peak Heating)
     base_fhr = 21 - cycle_hour
     if base_fhr < 0: base_fhr += 24
     
-    # Loop through Day 1 to Day 7 
     for day in range(1, 8):
         fhr = base_fhr + (day - 1) * 24
         file_name = f"blend.t{hour_str}z.core.f{fhr:03d}.co.grib2"
@@ -192,35 +158,30 @@ def process_nbm():
                 print(f" -> Could not find standard RH/Wind for Day {day}")
                 continue
 
-            # Fallback if Gust isn't in the GRIB message
             if gust_det is None: gust_det = wind_det
 
             wind_det = ms_to_mph(wind_det)
             gust_det = ms_to_mph(gust_det)
 
-            # SIMULATE PROPORTIONAL SPREAD (Creates dynamic, realistic uncertainty maps)
-            rh_10 = np.clip(rh_det * 0.8, 5, 100)  # Driest is 20% lower than median
-            rh_90 = np.clip(rh_det * 1.2, 5, 100)  # Wettest is 20% higher than median
+            # SIMULATE PROPORTIONAL SPREAD
+            rh_10 = np.clip(rh_det * 0.8, 5, 100) 
+            rh_90 = np.clip(rh_det * 1.2, 5, 100) 
             
-            wind_10 = np.clip(wind_det * 0.6, 0, 100) # Calmest is 40% lower than median
-            wind_90 = wind_det * 1.4                  # Gustiest is 40% higher than median
+            wind_10 = np.clip(wind_det * 0.6, 0, 100)
+            wind_90 = wind_det * 1.4                  
             gust_90 = gust_det * 1.4
 
-            # 1. Worst-Case: Driest RH and Windiest
+            # 1. Worst-Case
             worst_case = calculate_fire_danger(rh_10, wind_90, gust_90)
             generate_prob_plot(worst_case, lats, lons, day, "worst", "Worst-Case Scenario (Low RH / High Wind)", init_time, fhr)
             
-            # 2. Expected (Median): Raw Deterministic Output
+            # 2. Expected (Median)
             median_case = calculate_fire_danger(rh_det, wind_det, gust_det)
-            generate_prob_plot(median_case, lats, lons, day, "median", "Expected Scenario (Median RH / Wind)", init_time, fhr)
+            generate_prob_plot(median_case, lats, lons, day, "median", "Expected Scenario (Median Forecast)", init_time, fhr)
 
-            # 3. Best-Case: Wettest RH and Calmest
+            # 3. Best-Case
             best_case = calculate_fire_danger(rh_90, wind_10, wind_10)
             generate_prob_plot(best_case, lats, lons, day, "best", "Best-Case Scenario (High RH / Low Wind)", init_time, fhr)
-            
-            # 4. Uncertainty Spread
-            uncertainty = calculate_uncertainty_index(rh_10, rh_90, wind_10, wind_90)
-            generate_prob_plot(uncertainty, lats, lons, day, "spread", "7-Day Uncertainty Spread", init_time, fhr, is_uncertainty=True)
             
         except Exception as e:
             print(f"Error processing Day {day}: {e}")
