@@ -10,14 +10,19 @@ import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 
 # --- 1. CONFIGURATION & THRESHOLDS ---
-# NC Red Flag Warning Criteria
-CRITICAL_RH = 25.0       # Percent
-CRITICAL_WIND = 20.0     # MPH
-CRITICAL_GUST = 30.0     # MPH
+# NC High (Red Flag Warning)
+HIGH_RH = 25.0
+HIGH_WIND = 20.0
+HIGH_GUST = 30.0
 
-# NC Increased Fire Danger (Elevated) Criteria
-ELEVATED_RH = 30.0       # Percent
-ELEVATED_GUST = 25.0     # MPH
+# NC Moderate (Increased Fire Danger)
+MOD_RH = 30.0
+MOD_GUST = 25.0
+
+# NC Low (Early Heads-Up)
+LOW_RH = 35.0
+LOW_WIND = 15.0
+LOW_GUST = 20.0
 
 lat_min, lat_max = 33.0, 37.5
 lon_min, lon_max = -85.5, -74.5
@@ -29,21 +34,24 @@ os.makedirs('public/images', exist_ok=True)
 # --- 2. FIRE DANGER MATH ---
 def calculate_fire_danger(rh, wind, gust):
     """
-    0 = Low
-    1 = Elevated (Increased Fire Danger Statement criteria)
-    2 = Critical (Red Flag Warning criteria)
+    0 = None (Green)
+    1 = Low (Yellow)
+    2 = Moderate / IFD (Orange)
+    3 = High / RFW (Red)
     """
     danger_grid = np.zeros_like(rh, dtype=int)
     
-    # 1. Apply Elevated Danger (IFD)
-    # RH <= 30% AND Gusts >= 25 mph
-    elevated_mask = (rh <= ELEVATED_RH) & (gust >= ELEVATED_GUST)
-    danger_grid[elevated_mask] = 1
+    # 1. Apply Low Danger
+    low_mask = (rh <= LOW_RH) & ((wind >= LOW_WIND) | (gust >= LOW_GUST))
+    danger_grid[low_mask] = 1
     
-    # 2. Apply Critical Danger (Red Flag Warning)
-    # Overwrites with 2 if RH <= 25% AND (Sustained >= 20 OR Gusts >= 30)
-    critical_mask = (rh <= CRITICAL_RH) & ((wind >= CRITICAL_WIND) | (gust >= CRITICAL_GUST))
-    danger_grid[critical_mask] = 2
+    # 2. Apply Moderate (IFD) Danger
+    mod_mask = (rh <= MOD_RH) & (gust >= MOD_GUST)
+    danger_grid[mod_mask] = 2
+    
+    # 3. Apply High (RFW) Danger
+    high_mask = (rh <= HIGH_RH) & ((wind >= HIGH_WIND) | (gust >= HIGH_GUST))
+    danger_grid[high_mask] = 3
     
     return danger_grid
 
@@ -59,7 +67,7 @@ def calculate_uncertainty_index(rh_10, rh_90, wind_10, wind_90):
     
     wind_score = np.ones_like(wind_spread, dtype=int)
     wind_score[wind_spread >= 5] = 2
-    wind_score[wind_spread >= 10] = 3
+    wind_score[wind_score >= 10] = 3
     wind_score[wind_spread >= 15] = 4
     wind_score[wind_spread >= 20] = 5
     
@@ -70,6 +78,11 @@ def ms_to_mph(ms):
 
 # --- 3. MAPPING ---
 def generate_prob_plot(plot_data, lats, lons, day, scenario, title_text, init_time, fhr, is_uncertainty=False):
+    import matplotlib.pyplot as plt
+    import cartopy.crs as ccrs
+    import cartopy.feature as cfeature
+    from datetime import timedelta
+    
     fig = plt.figure(figsize=(10, 8))
     ax = plt.axes(projection=ccrs.PlateCarree())
     ax.set_extent([lon_min, lon_max, lat_min, lat_max], crs=ccrs.PlateCarree())
@@ -89,10 +102,11 @@ def generate_prob_plot(plot_data, lats, lons, day, scenario, title_text, init_ti
         tick_labels = ['1 (Low)', '2', '3', '4', '5 (High)']
     else:
         from matplotlib.colors import ListedColormap
-        cmap = ListedColormap(['#A1D99B', '#FEE08B', '#D73027']) 
-        levels = [-0.5, 0.5, 1.5, 2.5]
-        tick_locs = [0, 1, 2]
-        tick_labels = ['Low', 'Elevated', 'Critical']
+        # Updated to 4 colors: Green, Yellow, Orange, Red
+        cmap = ListedColormap(['#A1D99B', '#FEE08B', '#FDAE61', '#D73027']) 
+        levels = [-0.5, 0.5, 1.5, 2.5, 3.5]
+        tick_locs = [0, 1, 2, 3]
+        tick_labels = ['None', 'Low', 'Mod (IFD)', 'High (RFW)']
 
     mesh = ax.pcolormesh(lons, lats, plot_data, cmap=cmap, vmin=levels[0], vmax=levels[-1], transform=ccrs.PlateCarree())
     
