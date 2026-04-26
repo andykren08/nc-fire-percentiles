@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NC 7-Day Strategic Fire Weather</title>
+    <title>North Carolina 7-Day Fire Weather Potential</title>
     <style>
         body { font-family: Arial, sans-serif; text-align: center; background-color: #f4f4f4; margin: 0; padding: 20px; }
         h1 { color: #333; margin-bottom: 5px; }
@@ -20,15 +20,14 @@
 </head>
 <body>
 
-    <h1>NC 7-Day Strategic Fire Weather (NBM)</h1>
-    <p>Daily Peak Fire Danger: Worst-Case, Best-Case, and Forecast Uncertainty</p>
+    <h1>North Carolina 7-Day Fire Weather Potential</h1>
+    <p>Daily Peak Fire Danger: Worst-Case, Best-Case, Median Outcomes</p>
 
     <div class="controls">
        <select id="modelSelect">
             <option value="worst">Worst-Case Scenario (Low Min RH / High Max Wind)</option>
-            <option value="median">50th Percentile Scenario (Median Forecast)</option>
+            <option value="median">Expected Scenario (Median Forecast)</option>
             <option value="best">Best-Case Scenario (High Min RH / Low Max Wind)</option>
-            <option value="spread">Forecast Uncertainty Index</option>
         </select>
         
         <button onclick="changeDay(-1)">&#10094; Prev Day</button>
