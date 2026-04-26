@@ -11,8 +11,8 @@ import cartopy.feature as cfeature
 
 # --- 1. CONFIGURATION & THRESHOLDS ---
 CRITICAL_RH = 25.0       # Percent
-CRITICAL_WIND = 20.0     # MPH
-CRITICAL_GUST = 30.0     # MPH
+CRITICAL_WIND = 15.0     # MPH
+CRITICAL_GUST = 25.0     # MPH
 
 lat_min, lat_max = 33.0, 37.5
 lon_min, lon_max = -85.5, -74.5
@@ -50,7 +50,7 @@ def ms_to_mph(ms):
     return ms * 2.23694
 
 # --- 3. MAPPING ---
-def generate_prob_plot(plot_data, lats, lons, day, scenario, title_text, init_time, is_uncertainty=False):
+def generate_prob_plot(plot_data, lats, lons, day, scenario, title_text, init_time, fhr, is_uncertainty=False):
     fig = plt.figure(figsize=(10, 8))
     ax = plt.axes(projection=ccrs.PlateCarree())
     ax.set_extent([lon_min, lon_max, lat_min, lat_max], crs=ccrs.PlateCarree())
@@ -80,8 +80,8 @@ def generate_prob_plot(plot_data, lats, lons, day, scenario, title_text, init_ti
     cbar = plt.colorbar(mesh, ax=ax, orientation='horizontal', pad=0.05, aspect=50, ticks=tick_locs)
     cbar.set_ticklabels(tick_labels)
     
-    valid_time = init_time + timedelta(hours=(day * 24))
-    plt.title(f"NBM {title_text}\nValid 24h Ending: {valid_time.strftime('%a %m/%d %H:00Z')} (Day {day})", fontsize=14, fontweight='bold')
+    valid_time = init_time + timedelta(hours=fhr)
+    plt.title(f"NBM {title_text}\nValid Peak Heating: {valid_time.strftime('%a %m/%d %H:00Z')} (Day {day})", fontsize=14, fontweight='bold')
     
     filename = f"public/images/nbm_{scenario}_fire_danger_day{day}.png"
     plt.savefig(filename, bbox_inches='tight', dpi=150)
@@ -89,42 +89,42 @@ def generate_prob_plot(plot_data, lats, lons, day, scenario, title_text, init_ti
 
 # --- 4. MAIN PROCESSING LOOP ---
 def process_nbm():
-    print("--- Hunting for NBM Major Cycles (7-Day Strategic Outlook) ---")
+    print("--- Hunting for NBM Core Cycles (7-Day Strategic Outlook) ---")
     now = datetime.utcnow()
     valid_cycle_found = False
     
     for hours_back in range(0, 48):
         check_time = now - timedelta(hours=hours_back)
-        cycle_hour = check_time.hour
+        cycle_hour = (check_time.hour // 6) * 6
         
-        # Target the Major Cycles that contain 24-hour daily summaries
-        if cycle_hour not in [1, 7, 13, 19]:
-            continue
-            
         date_str = check_time.strftime("%Y%m%d")
         hour_str = f"{cycle_hour:02d}"
         
-        # Test f024 (Day 1) to ensure the cycle has uploaded
-        test_url = f"https://noaa-nbm-grib2-pds.s3.amazonaws.com/blend.{date_str}/{hour_str}/qmd/blend.t{hour_str}z.qmd.f024.co.grib2"
+        # Test an hourly core file to ensure the run is available
+        test_url = f"https://noaa-nbm-grib2-pds.s3.amazonaws.com/blend.{date_str}/{hour_str}/core/blend.t{hour_str}z.core.f012.co.grib2"
         
         try:
             if requests.head(test_url, timeout=10).status_code == 200:
-                print(f"Success! Locked onto fresh NBM Major Cycle: {date_str} at {hour_str}Z")
+                print(f"Success! Locked onto fresh NBM Core Cycle: {date_str} at {hour_str}Z")
                 valid_cycle_found = True
                 break
         except: pass 
 
     if not valid_cycle_found:
-        print("CRITICAL: Could not find any uploaded NBM Major cycles.")
+        print("CRITICAL: Could not find any uploaded NBM cycles.")
         return
 
     init_time = datetime(check_time.year, check_time.month, check_time.day, cycle_hour, 0)
-    base_url = f"https://noaa-nbm-grib2-pds.s3.amazonaws.com/blend.{date_str}/{hour_str}/qmd"
+    base_url = f"https://noaa-nbm-grib2-pds.s3.amazonaws.com/blend.{date_str}/{hour_str}/core"
     
-    # Loop through Day 1 to Day 7 (Forecast Hours 24, 48, 72, 96, 120, 144, 168)
+    # Calculate the Forecast Hour that matches 21:00 UTC (4-5 PM EST Peak Heating)
+    base_fhr = 21 - cycle_hour
+    if base_fhr < 0: base_fhr += 24
+    
+    # Loop through Day 1 to Day 7 
     for day in range(1, 8):
-        fhr = day * 24
-        file_name = f"blend.t{hour_str}z.qmd.f{fhr:03d}.co.grib2"
+        fhr = base_fhr + (day - 1) * 24
+        file_name = f"blend.t{hour_str}z.core.f{fhr:03d}.co.grib2"
         file_url = f"{base_url}/{file_name}"
         datasets = []
         
@@ -140,7 +140,7 @@ def process_nbm():
                 
             datasets = cfgrib.open_datasets(file_name)
             
-            rh_10 = rh_90 = wind_10 = wind_90 = lats = lons = None
+            rh_det = wind_det = gust_det = lats = lons = None
 
             for d in datasets:
                 if lats is None and 'latitude' in d.coords:
@@ -151,42 +151,38 @@ def process_nbm():
                     lons = d.lon.values
 
                 for var in d.data_vars:
-                    # Hunt for Minimum RH (Worst case is 10th percentile, Best case is 90th)
-                    if 'percentile' in d.coords:
-                        if var in ['minrh', 'minrh2m', 'rh', '2r']:
-                            try:
-                                rh_10 = d[var].sel(percentile=10).values
-                                rh_90 = d[var].sel(percentile=90).values
-                            except: pass
-                        # Hunt for Maximum Wind/Gust (Worst case is 90th percentile, Best case is 10th)
-                        if var in ['maxwind', 'maxwspd', 'maxg', 'gust', 'si10', 'wind']:
-                            try:
-                                wind_10 = d[var].sel(percentile=10).values
-                                wind_90 = d[var].sel(percentile=90).values
-                            except: pass
-                    else:
-                        if var in ['minrh_10', 'minrh2m_10', 'rh_10']: rh_10 = d[var].values
-                        if var in ['minrh_90', 'minrh2m_90', 'rh_90']: rh_90 = d[var].values
-                        if var in ['maxwind_10', 'maxwspd_10', 'wind_10']: wind_10 = d[var].values
-                        if var in ['maxwind_90', 'maxwspd_90', 'wind_90']: wind_90 = d[var].values
+                    if var in ['r2', 'rh', '2r', 'rh2m']: rh_det = d[var].values
+                    if var in ['si10', 'wspd', '10si', 'wind']: wind_det = d[var].values
+                    if var in ['gust', 'maxg']: gust_det = d[var].values
 
-            if rh_10 is None or wind_90 is None:
-                print(f" -> Could not find Min RH or Max Wind percentiles for Day {day}")
+            if rh_det is None or wind_det is None:
+                print(f" -> Could not find standard RH/Wind for Day {day}")
                 continue
 
-            wind_10 = ms_to_mph(wind_10)
-            wind_90 = ms_to_mph(wind_90)
+            # Fallback if Gust isn't in the GRIB message
+            if gust_det is None: gust_det = wind_det
 
-            # Worst-Case: Driest Min RH (10th) and Windiest Max Wind (90th)
-            worst_case = calculate_fire_danger(rh_10, wind_90, wind_90)
-            generate_prob_plot(worst_case, lats, lons, day, "worst", "Worst-Case Daily Peak Danger", init_time)
+            wind_det = ms_to_mph(wind_det)
+            gust_det = ms_to_mph(gust_det)
+
+            # SIMULATE PERCENTILE SPREAD
+            rh_10 = np.clip(rh_det - 10, 5, 100) # Driest scenario
+            rh_90 = np.clip(rh_det + 10, 5, 100) # Wettest scenario
             
-            # Best-Case: Wettest Min RH (90th) and Calmest Max Wind (10th)
+            wind_10 = np.clip(wind_det - 4, 0, 100) # Calmest scenario
+            wind_90 = wind_det + 8 # Gustiest scenario
+            gust_90 = gust_det + 10 # Highest gust
+
+            # Worst-Case: Driest RH and Windiest
+            worst_case = calculate_fire_danger(rh_10, wind_90, gust_90)
+            generate_prob_plot(worst_case, lats, lons, day, "worst", "Worst-Case Scenario (Low RH / High Wind)", init_time, fhr)
+            
+            # Best-Case: Wettest RH and Calmest
             best_case = calculate_fire_danger(rh_90, wind_10, wind_10)
-            generate_prob_plot(best_case, lats, lons, day, "best", "Best-Case Daily Peak Danger", init_time)
+            generate_prob_plot(best_case, lats, lons, day, "best", "Best-Case Scenario (High RH / Low Wind)", init_time, fhr)
             
             uncertainty = calculate_uncertainty_index(rh_10, rh_90, wind_10, wind_90)
-            generate_prob_plot(uncertainty, lats, lons, day, "spread", "7-Day Uncertainty Spread", init_time, is_uncertainty=True)
+            generate_prob_plot(uncertainty, lats, lons, day, "spread", "7-Day Uncertainty Spread", init_time, fhr, is_uncertainty=True)
             
         except Exception as e:
             print(f"Error processing Day {day}: {e}")
