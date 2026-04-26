@@ -24,8 +24,8 @@ LOW_RH = 35.0
 LOW_WIND = 15.0
 LOW_GUST = 20.0
 
-lat_min, lat_max = 31.0, 39.5
-lon_min, lon_max = -87.5, -72.5
+lat_min, lat_max = 32.5, 39.5
+lon_min, lon_max = -85.5, -73.5
 
 os.makedirs('public/images', exist_ok=True)
 
