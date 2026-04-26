@@ -180,6 +180,8 @@ def process_nbm():
     
     base_fhr = 21 - cycle_hour
     if base_fhr < 0: base_fhr += 24
+
+    dss_lines = []
     
     for day in range(1, 8):
         fhr = base_fhr + (day - 1) * 24
@@ -242,6 +244,26 @@ def process_nbm():
             # 3. Best-Case
             best_case = calculate_fire_danger(rh_90, wind_10, wind_10)
             generate_prob_plot(best_case, lats, lons, day, "best", "Best-Case Scenario (High RH / Low Wind)", init_time, fhr)
+
+        # --- AUTOMATED DSS BULLETIN LOGIC ---
+            max_median = np.max(median_case)
+            max_worst = np.max(worst_case)
+            day_name = valid_time.strftime('%A, %b %d')
+
+            if max_median == 3:
+                status = f"<strong>Day {day} ({day_name}): High (Red Flag Threat).</strong> Expected forecast reaches RFW criteria during peak heating."
+            elif max_median == 2:
+                status = f"<strong>Day {day} ({day_name}): Mod (IFD).</strong> Expected forecast reaches Increased Fire Danger criteria."
+                if max_worst == 3:
+                    status += " <em>Note: The worst-case scenario shows localized Red Flag conditions are possible if the environment trends drier/windier.</em>"
+            elif max_median == 1:
+                status = f"<strong>Day {day} ({day_name}): Low.</strong> Breezy and dry conditions possible, but generally remaining below IFD thresholds."
+                if max_worst >= 2:
+                    status += " <em>Note: The worst-case scenario shows IFD conditions cannot be completely ruled out.</em>"
+            else:
+                status = f"<strong>Day {day} ({day_name}): None (Green).</strong> Peak heating meteorological conditions remain below critical fire weather thresholds."
+
+            dss_lines.append(f"<li>{status}</li>")
             
         except Exception as e:
             print(f"Error processing Day {day}: {e}")
@@ -253,6 +275,11 @@ def process_nbm():
             for junk in glob.glob(f"{file_name}*"):
                 try: os.remove(junk)
                 except: pass
+
+# Save the DSS Bulletin to an HTML snippet
+    with open('public/dss_bulletin.html', 'w') as f:
+        f.write("<ul style='text-align: left; line-height: 1.6;'>\n" + "\n".join(dss_lines) + "\n</ul>")
+        f.write("<p style='font-size: 12px; color: gray; text-align: left;'><em>*Disclaimer: This automated guidance evaluates meteorological conditions only and does not account for local fuel moisture. Consult official NWS forecasts for operational decisions.</em></p>")
 
 if __name__ == "__main__":
     process_nbm()
