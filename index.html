@@ -16,6 +16,8 @@
         #statusText { font-size: 18px; font-weight: bold; margin-top: 15px; color: #444; }
         .instructions { font-size: 14px; color: #666; margin-top: 10px; }
         .error-box { padding: 40px; background-color: #ffebee; border: 2px dashed #ef9a9a; border-radius: 8px; color: #c62828; font-weight: bold; display: none; }
+        .dss-container { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); max-width: 900px; margin: 20px auto; border-left: 5px solid #0056b3; }
+        .dss-container h3 { margin-top: 0; color: #333; text-align: left; }
     </style>
 </head>
 <body>
@@ -38,6 +40,11 @@
         <img id="mapImage" src="" alt="Forecast Map" onerror="handleMissingImage()">
         <div id="errorBox" class="error-box">Map data is currently unavailable.</div>
         <div id="statusText">Loading...</div>
+    </div>
+
+    <div class="dss-container">
+        <h3>Automated Meteorological Summary</h3>
+        <div id="dssContent">Loading latest text bulletin...</div>
     </div>
     
     <p class="instructions">Tip: You can use the <strong>Left</strong> and <strong>Right</strong> arrow keys to navigate through the week.</p>
@@ -103,7 +110,18 @@
             else if (event.key === "ArrowLeft") changeDay(-1);
         });
 
-        window.onload = updateImage;
+        function loadDSS() {
+            const timestamp = new Date().getTime();
+            let basePath = window.location.pathname;
+            if (!basePath.endsWith('/')) { basePath += '/'; }
+            
+            fetch(`${basePath}public/dss_bulletin.html?v=${timestamp}`)
+                .then(response => response.text())
+                .then(data => { document.getElementById("dssContent").innerHTML = data; })
+                .catch(error => { document.getElementById("dssContent").innerHTML = "DSS Bulletin currently unavailable."; });
+        }
+        
+        window.onload = () => { updateImage(); loadDSS(); };
     </script>
 </body>
 </html>
