@@ -108,6 +108,34 @@ def generate_prob_plot(plot_data, lats, lons, day, scenario, title_text, init_ti
 
     # Step 1: Save the initial plot with all its legends.
     # 'bbox_inches=tight' handles the dynamic text legend width.
+
+    # Place text box slightly outside the right edge of the map
+    ax.text(1.03, 0.5, legend_text, transform=ax.transAxes, fontsize=10,
+            verticalalignment='center',
+            bbox=dict(boxstyle='round,pad=0.8', facecolor='#f8f9fa', edgecolor='gray', alpha=0.9))
+            
+    # --- NEW: Plot Major North Carolina Cities ---
+    cities = {
+        'Asheville': (-82.5515, 35.5951),
+        'Charlotte': (-80.8431, 35.2271),
+        'Greensboro': (-79.7922, 36.0726),
+        'Raleigh': (-78.6382, 35.7796),
+        'Fayetteville': (-78.8784, 35.0527),
+        'Wilmington': (-77.9447, 34.2257)
+    }
+
+    for city, (lon, lat) in cities.items():
+        # Plot a small black dot for the city location
+        ax.plot(lon, lat, marker='o', color='black', markersize=4, transform=ccrs.PlateCarree())
+        
+        # Add the city text label slightly offset from the dot
+        ax.text(lon + 0.06, lat + 0.04, city, transform=ccrs.PlateCarree(),
+                fontsize=8, fontweight='bold', color='black',
+                bbox=dict(boxstyle='round,pad=0.1', facecolor='white', edgecolor='none', alpha=0.6))
+    
+    # Define filenames for the intermediate and final images
+    temp_filename = f"base_fire_danger_plot.png"
+    
     plt.savefig(temp_filename, bbox_inches='tight', dpi=150)
     plt.close()
 
@@ -289,7 +317,7 @@ def process_nbm():
 # Save the DSS Bulletin to an HTML snippet
     with open('public/dss_bulletin.html', 'w') as f:
         f.write("<ul style='text-align: left; line-height: 1.6;'>\n" + "\n".join(dss_lines) + "\n</ul>")
-        f.write("<p style='font-size: 12px; color: gray; text-align: left;'><em>*Disclaimer: This automated guidance evaluates meteorological conditions only and does not account for local fuel moisture. Consult official NWS forecasts for operational decisions.</em></p>")
+        f.write("<p style='font-size: 12px; color: gray; text-align: left;'><em>*Disclaimer: This automated guidance evaluates meteorological conditions from a model only and does not account for local fuel moisture. Consult official NWS forecasts for operational decisions.</em></p>")
 
 if __name__ == "__main__":
     process_nbm()
