@@ -165,22 +165,27 @@ def process_nbm():
             wind_det = ms_to_mph(wind_det)
             gust_det = ms_to_mph(gust_det)
 
-            # SIMULATE PERCENTILE SPREAD
-            rh_10 = np.clip(rh_det - 10, 5, 100) # Driest scenario
-            rh_90 = np.clip(rh_det + 10, 5, 100) # Wettest scenario
+            # SIMULATE PROPORTIONAL SPREAD (Creates dynamic, realistic uncertainty maps)
+            rh_10 = np.clip(rh_det * 0.8, 5, 100)  # Driest is 20% lower than median
+            rh_90 = np.clip(rh_det * 1.2, 5, 100)  # Wettest is 20% higher than median
             
-            wind_10 = np.clip(wind_det - 4, 0, 100) # Calmest scenario
-            wind_90 = wind_det + 8 # Gustiest scenario
-            gust_90 = gust_det + 10 # Highest gust
+            wind_10 = np.clip(wind_det * 0.6, 0, 100) # Calmest is 40% lower than median
+            wind_90 = wind_det * 1.4                  # Gustiest is 40% higher than median
+            gust_90 = gust_det * 1.4
 
-            # Worst-Case: Driest RH and Windiest
+            # 1. Worst-Case: Driest RH and Windiest
             worst_case = calculate_fire_danger(rh_10, wind_90, gust_90)
             generate_prob_plot(worst_case, lats, lons, day, "worst", "Worst-Case Scenario (Low RH / High Wind)", init_time, fhr)
             
-            # Best-Case: Wettest RH and Calmest
+            # 2. Expected (Median): Raw Deterministic Output
+            median_case = calculate_fire_danger(rh_det, wind_det, gust_det)
+            generate_prob_plot(median_case, lats, lons, day, "median", "Expected Scenario (Median RH / Wind)", init_time, fhr)
+
+            # 3. Best-Case: Wettest RH and Calmest
             best_case = calculate_fire_danger(rh_90, wind_10, wind_10)
             generate_prob_plot(best_case, lats, lons, day, "best", "Best-Case Scenario (High RH / Low Wind)", init_time, fhr)
             
+            # 4. Uncertainty Spread
             uncertainty = calculate_uncertainty_index(rh_10, rh_90, wind_10, wind_90)
             generate_prob_plot(uncertainty, lats, lons, day, "spread", "7-Day Uncertainty Spread", init_time, fhr, is_uncertainty=True)
             
