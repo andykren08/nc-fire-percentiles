@@ -85,6 +85,20 @@ def generate_prob_plot(plot_data, lats, lons, day, scenario, title_text, init_ti
     valid_time = init_time + timedelta(hours=fhr)
     plt.title(f"NBM {title_text}\nValid Peak Heating: {valid_time.strftime('%a %m/%d %H:00Z')} (Day {day})", fontsize=14, fontweight='bold')
     
+    # --- NEW: Burn the threshold legend directly into the image ---
+    legend_text = (
+        "Threshold Criteria:\n\n"
+        "High (RFW):\nRH <= 25% AND\n(Wind >= 20 or Gust >= 30 mph)\n\n"
+        "Mod (IFD):\nRH <= 30% AND\nGust >= 25 mph\n\n"
+        "Low:\nRH <= 35% AND\n(Wind >= 15 or Gust >= 20 mph)"
+    )
+    
+    # Place text box slightly outside the right edge of the map
+    ax.text(1.03, 0.5, legend_text, transform=ax.transAxes, fontsize=10,
+            verticalalignment='center',
+            bbox=dict(boxstyle='round,pad=0.8', facecolor='#f8f9fa', edgecolor='gray', alpha=0.9))
+    
+    # 'bbox_inches=tight' automatically expands the saved image to fit the new text box
     filename = f"public/images/nbm_{scenario}_fire_danger_day{day}.png"
     plt.savefig(filename, bbox_inches='tight', dpi=150)
     plt.close()
