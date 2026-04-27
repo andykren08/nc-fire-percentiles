@@ -76,10 +76,10 @@ def generate_prob_plot(plot_data, lats, lons, day, scenario, title_text, init_ti
 
     from matplotlib.colors import ListedColormap
     # 4 colors: Green, Yellow, Orange, Red
-    cmap = ListedColormap(['#A1D99B', '#FEE08B', '#FDAE61', '#D73027']) 
+    cmap = ListedColormap(['#FFFFFF00', '#FEE08B', '#FDAE61', '#D73027']) 
     levels = [-0.5, 0.5, 1.5, 2.5, 3.5]
     tick_locs = [0, 1, 2, 3]
-    tick_labels = ['None', 'Low', 'Mod (IFD)', 'High (RFW)']
+    tick_labels = ['None', 'Low', 'Mod (IFD)', 'High (Red Flag)']
 
     mesh = ax.pcolormesh(lons, lats, plot_data, cmap=cmap, vmin=levels[0], vmax=levels[-1], transform=ccrs.PlateCarree())
     
