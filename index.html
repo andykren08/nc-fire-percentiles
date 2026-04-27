@@ -18,6 +18,13 @@
         .error-box { padding: 40px; background-color: #ffebee; border: 2px dashed #ef9a9a; border-radius: 8px; color: #c62828; font-weight: bold; display: none; }
         .dss-container { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); max-width: 1200px; margin: 20px auto; border-left: 5px solid #0056b3; }
         .dss-container h3 { margin-top: 0; color: #333; text-align: left; }
+        .panel-container { max-width: 1200px; margin: 40px auto 20px; text-align: left; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+        .panel-container h3 { margin-top: 0; color: #333; border-bottom: 2px solid #0056b3; padding-bottom: 5px; }
+        .grid-7day { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-top: 15px; }
+        .grid-item { text-align: center; }
+        .grid-item img { width: 100%; height: auto; border: 1px solid #ccc; border-radius: 4px; cursor: pointer; transition: transform 0.2s; }
+        .grid-item img:hover { transform: scale(1.03); box-shadow: 0 4px 8px rgba(0,0,0,0.2); }
+        .grid-item h4 { margin: 8px 0; color: #444; font-size: 16px; }
     </style>
 </head>
 <body>
@@ -45,6 +52,13 @@
     <div class="dss-container">
         <h3>Automated Meteorological Summary</h3>
         <div id="dssContent">Loading latest text bulletin...</div>
+    </div>
+
+    <div class="panel-container">
+        <h3>7-Day Worst-Case Glance</h3>
+        <p class="instructions" style="text-align: left; margin-top: 0;">A quick-look at the highest potential fire danger (worst-case scenario) for the upcoming week.</p>
+        <div class="grid-7day" id="panelGrid">
+            </div>
     </div>
     
     <p class="instructions">Tip: You can use the <strong>Left</strong> and <strong>Right</strong> arrow keys to navigate through the week.</p>
@@ -120,8 +134,28 @@
                 .then(data => { document.getElementById("dssContent").innerHTML = data; })
                 .catch(error => { document.getElementById("dssContent").innerHTML = "DSS Bulletin currently unavailable."; });
         }
+
+        function loadQuickLookPanel() {
+            const panelGrid = document.getElementById("panelGrid");
+            const timestamp = new Date().getTime();
+            let basePath = window.location.pathname;
+            if (!basePath.endsWith('/')) { basePath += '/'; }
+            
+            let htmlContent = "";
+            for (let i = 1; i <= 7; i++) {
+                // We specifically target the "worst" scenario maps here
+                let imgSrc = `${basePath}public/images/nbm_worst_fire_danger_day${i}.png?v=${timestamp}`;
+                htmlContent += `
+                    <div class="grid-item">
+                        <h4>Day ${i}</h4>
+                        <img src="${imgSrc}" alt="Day ${i} Worst Case" onerror="this.style.display='none'" title="Click to enlarge (opens in new tab)" onclick="window.open('${imgSrc}', '_blank')">
+                    </div>
+                `;
+            }
+            panelGrid.innerHTML = htmlContent;
+        }
         
-        window.onload = () => { updateImage(); loadDSS(); };
+        window.onload = () => { updateImage(); loadDSS(); loadQuickLookPanel(); };
     </script>
 </body>
 </html>
