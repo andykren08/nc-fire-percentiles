@@ -32,7 +32,7 @@ os.makedirs('public/images', exist_ok=True)
 # --- 2. FIRE DANGER MATH ---
 def calculate_fire_danger(rh, wind, gust):
     """
-    0 = None (Green)
+    0 = None (White)
     1 = Low (Yellow)
     2 = Moderate / IFD (Orange)
     3 = High / RFW (Red)
