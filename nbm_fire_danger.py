@@ -62,7 +62,7 @@ def generate_prob_plot(plot_data, lats, lons, day, scenario, title_text, init_ti
     from PIL import Image
     import PIL.ImageOps
 
-    fig = plt.figure(figsize=(10, 8))
+    fig = plt.figure(figsize=(14, 10))
     ax = plt.axes(projection=ccrs.PlateCarree())
     ax.set_extent([lon_min, lon_max, lat_min, lat_max], crs=ccrs.PlateCarree())
 
