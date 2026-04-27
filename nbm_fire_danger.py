@@ -75,8 +75,8 @@ def generate_prob_plot(plot_data, lats, lons, day, scenario, title_text, init_ti
     except: pass
 
     from matplotlib.colors import ListedColormap
-    # 4 colors: Green, Yellow, Orange, Red
-    cmap = ListedColormap(['#FFFFFF00', '#FEE08B', '#FDAE61', '#D73027']) 
+    # 4 colors: Transparent, Bright Yellow, Deep Orange, Crimson Red
+    cmap = ListedColormap(['#FFFFFF00', '#FFFF00', '#FF6600', '#CC0000'])
     levels = [-0.5, 0.5, 1.5, 2.5, 3.5]
     tick_locs = [0, 1, 2, 3]
     tick_labels = ['None', 'Low', 'Mod (IFD)', 'High (Red Flag)']
@@ -117,11 +117,16 @@ def generate_prob_plot(plot_data, lats, lons, day, scenario, title_text, init_ti
     # --- NEW: Plot Major North Carolina Cities ---
     cities = {
         'Asheville': (-82.5515, 35.5951),
+        'Boone': (-81.6746, 36.2168),
         'Charlotte': (-80.8431, 35.2271),
         'Greensboro': (-79.7922, 36.0726),
         'Raleigh': (-78.6382, 35.7796),
         'Fayetteville': (-78.8784, 35.0527),
-        'Wilmington': (-77.9447, 34.2257)
+        'Greenville': (-77.3664, 35.6127),
+        'Wilmington': (-77.9447, 34.2257),
+        'Morehead City': (-76.7497, 34.7229),
+        'Elizabeth City': (-76.2510, 36.2946),
+        'Cape Hatteras': (-75.5200, 35.2672)
     }
 
     for city, (lon, lat) in cities.items():
