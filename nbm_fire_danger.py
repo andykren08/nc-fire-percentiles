@@ -346,8 +346,12 @@ def process_nbm():
     # Fetch the exact time the Action runs, localized to Eastern Time
     now_time = datetime.now(ZoneInfo("America/New_York")).strftime('%A, %B %d, %Y at %I:%M %p %Z')
     
+    # NEW: Save just the timestamp to a text file for the top of the website
+    with open('public/timestamp.txt', 'w') as f:
+        f.write(f"Last Refreshed: {now_time}")
+    
     with open('public/dss_bulletin.html', 'w') as f:
-        # Add the Timestamp to the top
+        # Add the Timestamp to the top of the DSS box
         f.write(f"<p style='color: #0056b3; font-weight: bold; text-align: left; margin-top: 0; border-bottom: 1px solid #ddd; padding-bottom: 8px;'>Data Last Refreshed: {now_time}</p>\n")
         
         # If all 7 days were green, output an "All Clear" message
