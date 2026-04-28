@@ -99,8 +99,8 @@ def generate_prob_plot(plot_data, lats, lons, day, scenario, title_text, init_ti
     valid_time = init_time + timedelta(hours=fhr)
     plt.title(f"NBM {title_text}\nValid Peak Heating: {valid_time.strftime('%a %m/%d %H:00Z')} (Day {day})", fontsize=14, fontweight='bold')
     
-    # --- NEW: Add NWS Raleigh text under the logo ---
-    ax.text(1.03, 0.90, "NWS Raleigh, NC", transform=ax.transAxes, fontsize=12, fontstyle='italic',
+    # Add NWS Raleigh text under the logo ---
+    ax.text(1.1, 0.85, "NWS Raleigh, NC", transform=ax.transAxes, fontsize=12, fontstyle='italic',
             verticalalignment='top', color='#444444')
     
     # Burn the threshold legend directly into the image
@@ -324,7 +324,7 @@ def process_nbm():
                         status += " <em>Note: The worst-case scenario shows IFD conditions cannot be completely ruled out.</em>"
                 else:
                     # Handles cases where median is Green, but Worst-Case implies a threat
-                    status = f"<strong>Day {day} ({day_name}): Expected None.</strong> Peak heating expected conditions are below thresholds."
+                    status = f"<strong>Day {day} ({day_name}): None.</strong> Peak heating expected conditions are below thresholds."
                     if max_worst >= 1:
                         status += " <em>Note: The worst-case scenario indicates localized Low/Elevated conditions cannot be entirely ruled out.</em>"
                 
