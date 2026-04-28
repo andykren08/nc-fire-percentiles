@@ -99,6 +99,10 @@ def generate_prob_plot(plot_data, lats, lons, day, scenario, title_text, init_ti
     valid_time = init_time + timedelta(hours=fhr)
     plt.title(f"NBM {title_text}\nValid Peak Heating: {valid_time.strftime('%a %m/%d %H:00Z')} (Day {day})", fontsize=14, fontweight='bold')
     
+    # --- NEW: Add NWS Raleigh text under the logo ---
+    ax.text(1.03, 0.90, "NWS Raleigh, NC", transform=ax.transAxes, fontsize=12, fontstyle='italic',
+            verticalalignment='top', color='#444444')
+    
     # Burn the threshold legend directly into the image
     legend_text = (
         "Threshold Criteria:\n\n"
@@ -300,24 +304,31 @@ def process_nbm():
             
             day_name = valid_time.strftime('%A, %b %d')
 
-            if max_median == 4:
-                status = f"<strong>Day {day} ({day_name}): EXTREME (PDS Red Flag Threat).</strong> Expected forecast reaches extreme criteria with critically low RH and gusty winds."
-            elif max_median == 3:
-                status = f"<strong>Day {day} ({day_name}): High (Red Flag Threat).</strong> Expected forecast reaches RFW criteria during peak heating."
-                if max_worst == 4:
-                    status += " <em>Note: The worst-case scenario shows localized EXTREME fire behavior is possible if winds overperform.</em>"
-            elif max_median == 2:
-                status = f"<strong>Day {day} ({day_name}): Mod (IFD).</strong> Expected forecast reaches Increased Fire Danger criteria."
-                if max_worst >= 3:
-                    status += " <em>Note: The worst-case scenario shows localized Red Flag conditions are possible if the environment trends drier/windier.</em>"
-            elif max_median == 1:
-                status = f"<strong>Day {day} ({day_name}): Low.</strong> Breezy and dry conditions possible, but generally remaining below IFD thresholds."
-                if max_worst >= 2:
-                    status += " <em>Note: The worst-case scenario shows IFD conditions cannot be completely ruled out.</em>"
+            # EXCEPTION-BASED REPORTING: Only generate text if there is a threat
+            if max_median == 0 and max_worst == 0:
+                pass # Completely green day, skip adding it to the bulletin
             else:
-                status = f"<strong>Day {day} ({day_name}): None (Green).</strong> Peak heating meteorological conditions remain below critical fire weather thresholds."
-
-            dss_lines.append(f"<li>{status}</li>")
+                if max_median == 4:
+                    status = f"<strong>Day {day} ({day_name}): EXTREME (PDS Red Flag Threat).</strong> Expected forecast reaches extreme criteria with critically low RH and gusty winds."
+                elif max_median == 3:
+                    status = f"<strong>Day {day} ({day_name}): High (Red Flag Threat).</strong> Expected forecast reaches RFW criteria during peak heating."
+                    if max_worst == 4:
+                        status += " <em>Note: The worst-case scenario shows localized EXTREME fire behavior is possible if winds overperform.</em>"
+                elif max_median == 2:
+                    status = f"<strong>Day {day} ({day_name}): Mod (IFD).</strong> Expected forecast reaches Increased Fire Danger criteria."
+                    if max_worst >= 3:
+                        status += " <em>Note: The worst-case scenario shows localized Red Flag conditions are possible if the environment trends drier/windier.</em>"
+                elif max_median == 1:
+                    status = f"<strong>Day {day} ({day_name}): Low.</strong> Breezy and dry conditions possible, but generally remaining below IFD thresholds."
+                    if max_worst >= 2:
+                        status += " <em>Note: The worst-case scenario shows IFD conditions cannot be completely ruled out.</em>"
+                else:
+                    # Handles cases where median is Green, but Worst-Case implies a threat
+                    status = f"<strong>Day {day} ({day_name}): Expected None.</strong> Peak heating expected conditions are below thresholds."
+                    if max_worst >= 1:
+                        status += " <em>Note: The worst-case scenario indicates localized Low/Elevated conditions cannot be entirely ruled out.</em>"
+                
+                dss_lines.append(f"<li>{status}</li>")
             
         except Exception as e:
             print(f"Error processing Day {day}: {e}")
@@ -330,10 +341,22 @@ def process_nbm():
                 try: os.remove(junk)
                 except: pass
 
-# Save the DSS Bulletin to an HTML snippet
+    # --- SAVE THE DSS BULLETIN WITH TIMESTAMP ---
+    from zoneinfo import ZoneInfo
+    # Fetch the exact time the Action runs, localized to Eastern Time
+    now_time = datetime.now(ZoneInfo("America/New_York")).strftime('%A, %B %d, %Y at %I:%M %p %Z')
+    
     with open('public/dss_bulletin.html', 'w') as f:
-        f.write("<ul style='text-align: left; line-height: 1.6;'>\n" + "\n".join(dss_lines) + "\n</ul>")
-        f.write("<p style='font-size: 12px; color: gray; text-align: left;'><em>*Disclaimer: This automated guidance evaluates meteorological conditions from a model only and does not account for local fuel moisture. Consult official NWS forecasts for operational decisions.</em></p>")
+        # Add the Timestamp to the top
+        f.write(f"<p style='color: #0056b3; font-weight: bold; text-align: left; margin-top: 0; border-bottom: 1px solid #ddd; padding-bottom: 8px;'>Data Last Refreshed: {now_time}</p>\n")
+        
+        # If all 7 days were green, output an "All Clear" message
+        if len(dss_lines) == 0:
+            f.write("<p style='text-align: left; font-weight: bold; color: #2e7d32; padding: 10px 0;'>No elevated fire weather threats expected over the next 7 days.</p>\n")
+        else:
+            f.write("<ul style='text-align: left; line-height: 1.6;'>\n" + "\n".join(dss_lines) + "\n</ul>\n")
+            
+        f.write("<p style='font-size: 12px; color: gray; text-align: left; margin-top: 15px;'><em>*Disclaimer: This automated guidance evaluates meteorological conditions only and does not account for local fuel moisture (ERC). Consult official NWS forecasts for operational decisions.</em></p>")
 
 if __name__ == "__main__":
     process_nbm()
