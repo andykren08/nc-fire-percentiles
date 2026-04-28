@@ -97,10 +97,10 @@ def generate_prob_plot(plot_data, lats, lons, day, scenario, title_text, init_ti
     cbar.set_ticklabels(tick_labels)
     
     valid_time = init_time + timedelta(hours=fhr)
-    plt.title(f"NBM {title_text}\nValid Peak Heating: {valid_time.strftime('%a %m/%d %H:00Z')} (Day {day})", fontsize=14, fontweight='bold')
+    plt.title(f" {title_text}\nValid Peak Heating: {valid_time.strftime('%a %m/%d %H:00Z')} (Day {day})", fontsize=14, fontweight='bold')
     
     # Add NWS Raleigh text under the logo ---
-    ax.text(1.1, 0.85, "NWS Raleigh, NC", transform=ax.transAxes, fontsize=12, fontstyle='italic',
+    ax.text(1.13, 0.83, "NWS Raleigh, NC", transform=ax.transAxes, fontsize=12, fontstyle='italic',
             verticalalignment='top', color='#444444')
     
     # Burn the threshold legend directly into the image
