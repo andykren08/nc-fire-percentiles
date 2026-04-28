@@ -10,6 +10,11 @@ import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 
 # --- 1. CONFIGURATION & THRESHOLDS ---
+# NC Extreme (PDS Red Flag)
+EXTREME_RH = 20.0
+EXTREME_WIND = 25.0
+EXTREME_GUST = 35.0
+
 # NC High (Red Flag Warning)
 HIGH_RH = 25.0
 HIGH_WIND = 20.0
@@ -32,10 +37,11 @@ os.makedirs('public/images', exist_ok=True)
 # --- 2. FIRE DANGER MATH ---
 def calculate_fire_danger(rh, wind, gust):
     """
-    0 = None (White)
+    0 = None (Transparent)
     1 = Low (Yellow)
     2 = Moderate / IFD (Orange)
     3 = High / RFW (Red)
+    4 = Extreme (Purple)
     """
     danger_grid = np.zeros_like(rh, dtype=int)
     
@@ -50,6 +56,10 @@ def calculate_fire_danger(rh, wind, gust):
     # 3. Apply High (RFW) Danger
     high_mask = (rh <= HIGH_RH) & ((wind >= HIGH_WIND) | (gust >= HIGH_GUST))
     danger_grid[high_mask] = 3
+    
+    # 4. Apply Extreme Danger
+    extreme_mask = (rh <= EXTREME_RH) & ((wind >= EXTREME_WIND) | (gust >= EXTREME_GUST))
+    danger_grid[extreme_mask] = 4
     
     return danger_grid
 
@@ -75,11 +85,11 @@ def generate_prob_plot(plot_data, lats, lons, day, scenario, title_text, init_ti
     except: pass
 
     from matplotlib.colors import ListedColormap
-    # 4 colors: Transparent, Bright Yellow, Deep Orange, Crimson Red
-    cmap = ListedColormap(['#FFFFFF00', '#FFFF00', '#FF6600', '#CC0000'])
-    levels = [-0.5, 0.5, 1.5, 2.5, 3.5]
-    tick_locs = [0, 1, 2, 3]
-    tick_labels = ['None', 'Low', 'Mod (IFD)', 'High (Red Flag)']
+    # 5 colors: Transparent, Bright Yellow, Deep Orange, Crimson Red, Vivid Purple
+    cmap = ListedColormap(['#FFFFFF00', '#FFFF00', '#FF6600', '#CC0000', '#9900CC']) 
+    levels = [-0.5, 0.5, 1.5, 2.5, 3.5, 4.5]
+    tick_locs = [0, 1, 2, 3, 4]
+    tick_labels = ['None', 'Low', 'Mod', 'High', 'Extreme']
 
     mesh = ax.pcolormesh(lons, lats, plot_data, cmap=cmap, vmin=levels[0], vmax=levels[-1], transform=ccrs.PlateCarree())
     
@@ -87,12 +97,13 @@ def generate_prob_plot(plot_data, lats, lons, day, scenario, title_text, init_ti
     cbar.set_ticklabels(tick_labels)
     
     valid_time = init_time + timedelta(hours=fhr)
-    plt.title(f" {title_text}\nValid Peak Heating: {valid_time.strftime('%a %m/%d %H:00Z')} (Day {day})", fontsize=14, fontweight='bold')
+    plt.title(f"NBM {title_text}\nValid Peak Heating: {valid_time.strftime('%a %m/%d %H:00Z')} (Day {day})", fontsize=14, fontweight='bold')
     
     # Burn the threshold legend directly into the image
     legend_text = (
         "Threshold Criteria:\n\n"
-        "High (RFW):\nRH <= 25% AND\n(Wind >= 20 or Gust >= 30 mph)\n\n"
+        "Extreme:\nRH <= 20% AND\n(Wind >= 25 or Gust >= 35 mph)\n\n"
+        "High (Red Flag):\nRH <= 25% AND\n(Wind >= 20 or Gust >= 30 mph)\n\n"
         "Mod (IFD):\nRH <= 30% AND\nGust >= 25 mph\n\n"
         "Low:\nRH <= 35% AND\n(Wind >= 15 or Gust >= 20 mph)"
     )
@@ -281,23 +292,23 @@ def process_nbm():
         # --- AUTOMATED DSS BULLETIN LOGIC ---
             valid_time = init_time + timedelta(hours=fhr) 
             
-            # Convert NBM 0-360 longitudes to -180 to 180 standard format
             lons_180 = np.where(lons > 180, lons - 360, lons)
-            
-            # Create a geographic "cookie cutter" for the NC Domain
             nc_mask = (lats >= lat_min) & (lats <= lat_max) & (lons_180 >= lon_min) & (lons_180 <= lon_max)
             
-            # ONLY search for the maximum threat level inside North Carolina
             max_median = np.max(median_case[nc_mask])
             max_worst = np.max(worst_case[nc_mask])
             
             day_name = valid_time.strftime('%A, %b %d')
 
-            if max_median == 3:
+            if max_median == 4:
+                status = f"<strong>Day {day} ({day_name}): EXTREME (PDS Red Flag Threat).</strong> Expected forecast reaches extreme criteria with critically low RH and gusty winds."
+            elif max_median == 3:
                 status = f"<strong>Day {day} ({day_name}): High (Red Flag Threat).</strong> Expected forecast reaches RFW criteria during peak heating."
+                if max_worst == 4:
+                    status += " <em>Note: The worst-case scenario shows localized EXTREME fire behavior is possible if winds overperform.</em>"
             elif max_median == 2:
                 status = f"<strong>Day {day} ({day_name}): Mod (IFD).</strong> Expected forecast reaches Increased Fire Danger criteria."
-                if max_worst == 3:
+                if max_worst >= 3:
                     status += " <em>Note: The worst-case scenario shows localized Red Flag conditions are possible if the environment trends drier/windier.</em>"
             elif max_median == 1:
                 status = f"<strong>Day {day} ({day_name}): Low.</strong> Breezy and dry conditions possible, but generally remaining below IFD thresholds."
