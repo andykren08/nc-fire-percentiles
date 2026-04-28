@@ -30,7 +30,8 @@
 <body>
 
     <h1>North Carolina 7-Day Fire Weather Potential</h1>
-    <p>Daily Peak Fire Danger: Worst-Case, Best-Case, and Median Outcomes</p>
+    <p style="margin-top: 0; color: #0056b3; font-weight: bold; font-size: 14px;" id="topTimestamp">Checking data age...</p>
+    <p>Daily Peak Fire Danger: Worst-Case, Best-Case, and Expected Scenarios</p>
 
     <div class="controls">
        <select id="modelSelect">
@@ -135,6 +136,17 @@
                 .catch(error => { document.getElementById("dssContent").innerHTML = "DSS Bulletin currently unavailable."; });
         }
 
+        function loadTopTimestamp() {
+            const cacheBuster = new Date().getTime();
+            let basePath = window.location.pathname;
+            if (!basePath.endsWith('/')) { basePath += '/'; }
+            
+            fetch(`${basePath}public/timestamp.txt?v=${cacheBuster}`)
+                .then(response => response.text())
+                .then(data => { document.getElementById("topTimestamp").innerText = data; })
+                .catch(error => { document.getElementById("topTimestamp").innerText = "Timestamp unavailable"; });
+        }
+
         function loadQuickLookPanel() {
             const panelGrid = document.getElementById("panelGrid");
             const timestamp = new Date().getTime();
@@ -155,7 +167,7 @@
             panelGrid.innerHTML = htmlContent;
         }
         
-        window.onload = () => { updateImage(); loadDSS(); loadQuickLookPanel(); };
+        window.onload = () => { updateImage(); loadTopTimestamp(); loadDSS(); loadQuickLookPanel(); };
     </script>
 </body>
 </html>
