@@ -446,7 +446,6 @@ def process_ndfd():
             if daily_rh_list and daily_wind_list:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore", category=RuntimeWarning)
-                    # Compress the isolated lists into the daily max/min, ignoring ocean NaNs
                     daily_rh = np.nanmin(np.array(daily_rh_list), axis=0)
                     daily_wind = np.nanmax(np.array(daily_wind_list), axis=0)
                     
@@ -459,11 +458,20 @@ def process_ndfd():
                 daily_gust_mph = daily_gust * 2.23694
                 
                 official_case = calculate_fire_danger(daily_rh, daily_wind_mph, daily_gust_mph)
-                
                 plot_time_utc = datetime(target_date.year, target_date.month, target_date.day, 21, 0)
                 generate_prob_plot(official_case, lats, lons, day, "official", "Official NWS Forecast (NDFD)", plot_time_utc, 0)
+                
             else:
-                print(f" -> No daytime data left on server for Day {day}. (Likely expired)")
+                # --- NEW: ANTI-CRASH FALLBACK ---
+                # Generate a safe, blank map so the HTML dropdown doesn't show a broken image!
+                print(f" -> No daytime data left on server for Day {day}. Generating safe blank map.")
+                if lats is not None:
+                    dummy_rh = np.ones_like(lats) * 100  # Force 100% RH
+                    dummy_wind = np.zeros_like(lats)     # Force 0 mph Wind
+                    empty_case = calculate_fire_danger(dummy_rh, dummy_wind, dummy_wind)
+                    
+                    plot_time_utc = datetime(target_date.year, target_date.month, target_date.day, 21, 0)
+                    generate_prob_plot(empty_case, lats, lons, day, "official", "Official Forecast (NDFD) - DAY EXPIRED", plot_time_utc, 0)
                 
         except Exception as e:
             print(f"Error processing NDFD Day {day}: {e}")
