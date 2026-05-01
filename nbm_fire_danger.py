@@ -365,25 +365,29 @@ def process_nbm():
 # --- 5. NDFD OFFICIAL FORECAST PROCESSING ---
 def process_ndfd():
     import warnings
+    import pandas as pd
+    from zoneinfo import ZoneInfo
     print("--- Hunting for Official NWS NDFD Grids ---")
     
     base_url = "https://tgftp.nws.noaa.gov/SL.us008001/ST.opnl/DF.gr2/DC.ndfd/AR.conus"
     periods = ["VP.001-003", "VP.004-007"]
-    variables = ["ds.minrh.bin", "ds.wspd.bin", "ds.wgst.bin"]
+    variables = ["ds.minrh.bin", "ds.wspd.bin", "ds.wgust.bin"] # FIXED: wgust.bin!
     
-    from zoneinfo import ZoneInfo
-    init_time = datetime.now(ZoneInfo("UTC"))
+    # Establish the exact calendar date for "Today" (Day 1) in Eastern Time
+    now_local = datetime.now(ZoneInfo("America/New_York"))
     
     for day in range(1, 8):
+        # Calculate the exact target date for this loop iteration
+        target_date = (now_local + timedelta(days=day-1)).date()
         period = periods[0] if day <= 3 else periods[1]
         
-        daily_rh = None
-        daily_wind = None
-        daily_gust = None
+        daily_rh_list = []
+        daily_wind_list = []
+        daily_gust_list = []
         lats = lons = None
         
         try:
-            print(f"Processing NDFD Official Forecast for Day {day}...")
+            print(f"Processing NDFD Official Forecast for Day {day} ({target_date})...")
             
             for var_file in variables:
                 file_url = f"{base_url}/{period}/{var_file}"
@@ -403,27 +407,29 @@ def process_ndfd():
                         lons = d.longitude.values
                         
                     for var in d.data_vars:
-                        val = d[var].values
-                        
-                        # Temporarily suppress warnings for all-NaN ocean slices
-                        with warnings.catch_warnings():
-                            warnings.simplefilter("ignore", category=RuntimeWarning)
-                            
-                            # Use np.nanmin and np.nanmax to ignore missing data!
-                            if 'minrh' in var_file:
-                                min_val = np.nanmin(val, axis=0) if val.ndim > 2 else val
-                                if daily_rh is None: daily_rh = min_val
-                                else: daily_rh = np.fmin(daily_rh, min_val)
+                        da = d[var]
+                        if 'valid_time' in da.coords:
+                            # Handle arrays of valid times (wspd/wgust) or single times (minrh)
+                            vtimes = da.valid_time.values
+                            if vtimes.ndim == 0:
+                                vtimes = [vtimes]
+                                vals = np.expand_dims(da.values, axis=0)
+                            else:
+                                vals = da.values
                                 
-                            elif 'wspd' in var_file:
-                                max_val = np.nanmax(val, axis=0) if val.ndim > 2 else val
-                                if daily_wind is None: daily_wind = max_val
-                                else: daily_wind = np.fmax(daily_wind, max_val)
+                            for i, vt in enumerate(vtimes):
+                                # Convert GRIB time to Eastern Time to match local calendar day
+                                vt_dt = pd.to_datetime(vt).tz_localize('UTC').tz_convert('America/New_York')
                                 
-                            elif 'wgst' in var_file:
-                                max_val = np.nanmax(val, axis=0) if val.ndim > 2 else val
-                                if daily_gust is None: daily_gust = max_val
-                                else: daily_gust = np.fmax(daily_gust, max_val)
+                                # ISOLATE THE DATA: Only save the slice if it belongs to the target day!
+                                if vt_dt.date() == target_date:
+                                    slice_val = vals[i]
+                                    if 'minrh' in var_file:
+                                        daily_rh_list.append(slice_val)
+                                    elif 'wspd' in var_file:
+                                        daily_wind_list.append(slice_val)
+                                    elif 'wgust' in var_file:
+                                        daily_gust_list.append(slice_val)
 
                 for d in datasets:
                     try: d.close()
@@ -432,16 +438,29 @@ def process_ndfd():
                     try: os.remove(junk)
                     except: pass
 
-            if daily_rh is not None and daily_wind is not None:
-                # FIX: NDFD winds are strictly m/s! Convert to mph properly.
+            # Math & Plotting
+            if daily_rh_list and daily_wind_list:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", category=RuntimeWarning)
+                    # Safely compress the lists into the daily max/min, ignoring ocean NaNs
+                    daily_rh = np.nanmin(np.array(daily_rh_list), axis=0)
+                    daily_wind = np.nanmax(np.array(daily_wind_list), axis=0)
+                    
+                    if daily_gust_list:
+                        daily_gust = np.nanmax(np.array(daily_gust_list), axis=0)
+                    else:
+                        daily_gust = daily_wind
+                        
+                # Convert from meters per second to mph
                 daily_wind_mph = daily_wind * 2.23694
-                if daily_gust is not None:
-                    daily_gust_mph = daily_gust * 2.23694
-                else:
-                    daily_gust_mph = daily_wind_mph
+                daily_gust_mph = daily_gust * 2.23694
                 
                 official_case = calculate_fire_danger(daily_rh, daily_wind_mph, daily_gust_mph)
-                generate_prob_plot(official_case, lats, lons, day, "official", "Official NWS Forecast (NDFD)", init_time, day * 24)
+                
+                # Trick the plot function to label the time as 21Z (5 PM Peak Heating) for the target date
+                plot_time_utc = datetime(target_date.year, target_date.month, target_date.day, 21, 0)
+                
+                generate_prob_plot(official_case, lats, lons, day, "official", "Official NWS Forecast (NDFD)", plot_time_utc, 0)
                 
         except Exception as e:
             print(f"Error processing NDFD Day {day}: {e}")
