@@ -367,49 +367,64 @@ def process_ndfd():
     import warnings
     import pandas as pd
     from zoneinfo import ZoneInfo
+    from datetime import datetime, timedelta, timezone
+    
     print("--- Hunting for Official NWS NDFD Grids ---")
     
     base_url = "https://tgftp.nws.noaa.gov/SL.us008001/ST.opnl/DF.gr2/DC.ndfd/AR.conus"
     periods = ["VP.001-003", "VP.004-007"]
-    variables = ["ds.minrh.bin", "ds.wspd.bin", "ds.wgust.bin"] # FIXED: wgust.bin!
+    variables = ["ds.minrh.bin", "ds.wspd.bin", "ds.wgust.bin"]
     
-    # Establish the exact calendar date for "Today" (Day 1) in Eastern Time
     now_local = datetime.now(ZoneInfo("America/New_York"))
     
-    for day in range(1, 8):
-        # Calculate the exact target date for this loop iteration
-        target_date = (now_local + timedelta(days=day-1)).date()
-        period = periods[0] if day <= 3 else periods[1]
-        
-        daily_rh_list = []
-        daily_wind_list = []
-        daily_gust_list = []
-        lats = lons = None
-        
-        try:
-            print(f"Processing NDFD Official Forecast for Day {day} ({target_date})...")
+    # STEP 1: Download ALL files first and dump them into a bucket to avoid file boundary gaps!
+    all_datasets = {'minrh': [], 'wspd': [], 'wgust': []}
+    lats = lons = None
+    
+    for period in periods:
+        for var_file in variables:
+            file_url = f"{base_url}/{period}/{var_file}"
+            local_file = f"ndfd_{period}_{var_file}"
             
-            for var_file in variables:
-                file_url = f"{base_url}/{period}/{var_file}"
-                local_file = f"ndfd_{var_file}"
-                
+            try:
                 resp = requests.get(file_url, timeout=30)
                 if resp.status_code == 200:
                     with open(local_file, 'wb') as f:
                         f.write(resp.content)
-                else:
-                    continue
-                
-                datasets = cfgrib.open_datasets(local_file)
-                for d in datasets:
-                    if lats is None and 'latitude' in d.coords:
-                        lats = d.latitude.values
-                        lons = d.longitude.values
-                        
+                    
+                    datasets = cfgrib.open_datasets(local_file)
+                    var_key = var_file.split('.')[1] # Extracts 'minrh', 'wspd', or 'wgust'
+                    
+                    for d in datasets:
+                        if lats is None and 'latitude' in d.coords:
+                            lats = d.latitude.values
+                            lons = d.longitude.values
+                        all_datasets[var_key].append(d)
+            except Exception as e:
+                pass # Skip silently if a specific slice is unavailable
+
+    # STEP 2: Loop through the 7 days and extract by strict UTC time window
+    for day in range(1, 8):
+        target_date = (now_local + timedelta(days=day-1)).date()
+        
+        # We only want grids valid during the "Peak Heating" window for the target date:
+        # 12Z (8 AM EDT) through 06Z the next morning (2 AM EDT). 
+        # This catches the afternoon winds and the 00Z Min RH grid perfectly!
+        window_start = datetime(target_date.year, target_date.month, target_date.day, 12, 0, tzinfo=timezone.utc)
+        window_end = window_start + timedelta(hours=18)
+        
+        daily_rh_list = []
+        daily_wind_list = []
+        daily_gust_list = []
+        
+        print(f"Processing NDFD Official Forecast for Day {day} ({target_date})...")
+        
+        try:
+            for var_key, ds_list in all_datasets.items():
+                for d in ds_list:
                     for var in d.data_vars:
                         da = d[var]
                         if 'valid_time' in da.coords:
-                            # Handle arrays of valid times (wspd/wgust) or single times (minrh)
                             vtimes = da.valid_time.values
                             if vtimes.ndim == 0:
                                 vtimes = [vtimes]
@@ -418,31 +433,20 @@ def process_ndfd():
                                 vals = da.values
                                 
                             for i, vt in enumerate(vtimes):
-                                # Convert GRIB time to Eastern Time to match local calendar day
-                                vt_dt = pd.to_datetime(vt).tz_localize('UTC').tz_convert('America/New_York')
+                                # Convert GRIB valid time to UTC timezone-aware datetime
+                                vt_utc = pd.to_datetime(vt).tz_localize('UTC')
                                 
-                                # ISOLATE THE DATA: Only save the slice if it belongs to the target day!
-                                if vt_dt.date() == target_date:
-                                    slice_val = vals[i]
-                                    if 'minrh' in var_file:
-                                        daily_rh_list.append(slice_val)
-                                    elif 'wspd' in var_file:
-                                        daily_wind_list.append(slice_val)
-                                    elif 'wgust' in var_file:
-                                        daily_gust_list.append(slice_val)
-
-                for d in datasets:
-                    try: d.close()
-                    except: pass
-                for junk in glob.glob(f"{local_file}*"):
-                    try: os.remove(junk)
-                    except: pass
+                                # ISOLATE: Does this grid fall inside our daytime window?
+                                if window_start <= vt_utc <= window_end:
+                                    if var_key == 'minrh': daily_rh_list.append(vals[i])
+                                    elif var_key == 'wspd': daily_wind_list.append(vals[i])
+                                    elif var_key == 'wgust': daily_gust_list.append(vals[i])
 
             # Math & Plotting
             if daily_rh_list and daily_wind_list:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore", category=RuntimeWarning)
-                    # Safely compress the lists into the daily max/min, ignoring ocean NaNs
+                    # Compress the isolated lists into the daily max/min, ignoring ocean NaNs
                     daily_rh = np.nanmin(np.array(daily_rh_list), axis=0)
                     daily_wind = np.nanmax(np.array(daily_wind_list), axis=0)
                     
@@ -451,19 +455,27 @@ def process_ndfd():
                     else:
                         daily_gust = daily_wind
                         
-                # Convert from meters per second to mph
                 daily_wind_mph = daily_wind * 2.23694
                 daily_gust_mph = daily_gust * 2.23694
                 
                 official_case = calculate_fire_danger(daily_rh, daily_wind_mph, daily_gust_mph)
                 
-                # Trick the plot function to label the time as 21Z (5 PM Peak Heating) for the target date
                 plot_time_utc = datetime(target_date.year, target_date.month, target_date.day, 21, 0)
-                
                 generate_prob_plot(official_case, lats, lons, day, "official", "Official NWS Forecast (NDFD)", plot_time_utc, 0)
+            else:
+                print(f" -> No daytime data left on server for Day {day}. (Likely expired)")
                 
         except Exception as e:
             print(f"Error processing NDFD Day {day}: {e}")
+
+    # STEP 3: Clean up all files and memory
+    for ds_list in all_datasets.values():
+        for d in ds_list:
+            try: d.close()
+            except: pass
+    for junk in glob.glob("ndfd_*"):
+        try: os.remove(junk)
+        except: pass
 
 if __name__ == "__main__":
     process_nbm()
