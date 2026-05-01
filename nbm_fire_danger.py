@@ -364,23 +364,19 @@ def process_nbm():
 
 # --- 5. NDFD OFFICIAL FORECAST PROCESSING ---
 def process_ndfd():
+    import warnings
     print("--- Hunting for Official NWS NDFD Grids ---")
     
-    # NDFD splits data into Days 1-3 and Days 4-7 on the NWS TGFTP server
     base_url = "https://tgftp.nws.noaa.gov/SL.us008001/ST.opnl/DF.gr2/DC.ndfd/AR.conus"
     periods = ["VP.001-003", "VP.004-007"]
     variables = ["ds.minrh.bin", "ds.wspd.bin", "ds.wgst.bin"]
     
-    # Use a fixed init time based on current run for plot titles
     from zoneinfo import ZoneInfo
     init_time = datetime.now(ZoneInfo("UTC"))
     
-    # We will output Days 1 through 7
     for day in range(1, 8):
-        # Determine if we need the Day 1-3 file or Day 4-7 file
         period = periods[0] if day <= 3 else periods[1]
         
-        # We will use dummy arrays to hold the daily max/min 
         daily_rh = None
         daily_wind = None
         daily_gust = None
@@ -389,12 +385,10 @@ def process_ndfd():
         try:
             print(f"Processing NDFD Official Forecast for Day {day}...")
             
-            # Process each variable independently
             for var_file in variables:
                 file_url = f"{base_url}/{period}/{var_file}"
                 local_file = f"ndfd_{var_file}"
                 
-                # Download the NDFD variable file
                 resp = requests.get(file_url, timeout=30)
                 if resp.status_code == 200:
                     with open(local_file, 'wb') as f:
@@ -402,31 +396,35 @@ def process_ndfd():
                 else:
                     continue
                 
-                # Open with cfgrib
                 datasets = cfgrib.open_datasets(local_file)
                 for d in datasets:
                     if lats is None and 'latitude' in d.coords:
                         lats = d.latitude.values
                         lons = d.longitude.values
                         
-                    # Extract values (simplified: takes the mean/max of the grid for the specific step)
-                    # Note: NDFD time dimensions can be complex, this grabs the most severe grid 
-                    # available in the file to represent the "peak" for that period block.
                     for var in d.data_vars:
                         val = d[var].values
-                        if 'minrh' in var_file:
-                            # Keep the lowest RH grid found
-                            if daily_rh is None: daily_rh = np.min(val, axis=0) if val.ndim > 2 else val
-                            else: daily_rh = np.minimum(daily_rh, np.min(val, axis=0) if val.ndim > 2 else val)
-                        elif 'wspd' in var_file:
-                            # Keep the highest wind grid found
-                            if daily_wind is None: daily_wind = np.max(val, axis=0) if val.ndim > 2 else val
-                            else: daily_wind = np.maximum(daily_wind, np.max(val, axis=0) if val.ndim > 2 else val)
-                        elif 'wgst' in var_file:
-                            if daily_gust is None: daily_gust = np.max(val, axis=0) if val.ndim > 2 else val
-                            else: daily_gust = np.maximum(daily_gust, np.max(val, axis=0) if val.ndim > 2 else val)
+                        
+                        # Temporarily suppress warnings for all-NaN ocean slices
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore", category=RuntimeWarning)
+                            
+                            # Use np.nanmin and np.nanmax to ignore missing data!
+                            if 'minrh' in var_file:
+                                min_val = np.nanmin(val, axis=0) if val.ndim > 2 else val
+                                if daily_rh is None: daily_rh = min_val
+                                else: daily_rh = np.fmin(daily_rh, min_val)
+                                
+                            elif 'wspd' in var_file:
+                                max_val = np.nanmax(val, axis=0) if val.ndim > 2 else val
+                                if daily_wind is None: daily_wind = max_val
+                                else: daily_wind = np.fmax(daily_wind, max_val)
+                                
+                            elif 'wgst' in var_file:
+                                max_val = np.nanmax(val, axis=0) if val.ndim > 2 else val
+                                if daily_gust is None: daily_gust = max_val
+                                else: daily_gust = np.fmax(daily_gust, max_val)
 
-                # Cleanup GRIBs to save GitHub Action memory
                 for d in datasets:
                     try: d.close()
                     except: pass
@@ -434,18 +432,15 @@ def process_ndfd():
                     try: os.remove(junk)
                     except: pass
 
-            # Math & Plotting
             if daily_rh is not None and daily_wind is not None:
-                # NDFD winds are in knots, convert to mph
-                daily_wind_mph = daily_wind * 1.15078
+                # FIX: NDFD winds are strictly m/s! Convert to mph properly.
+                daily_wind_mph = daily_wind * 2.23694
                 if daily_gust is not None:
-                    daily_gust_mph = daily_gust * 1.15078
+                    daily_gust_mph = daily_gust * 2.23694
                 else:
                     daily_gust_mph = daily_wind_mph
                 
                 official_case = calculate_fire_danger(daily_rh, daily_wind_mph, daily_gust_mph)
-                
-                # Note: We name it 'nbm_official_...' so we don't have to rewrite your Javascript!
                 generate_prob_plot(official_case, lats, lons, day, "official", "Official NWS Forecast (NDFD)", init_time, day * 24)
                 
         except Exception as e:
