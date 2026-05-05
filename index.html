@@ -127,26 +127,32 @@
             else if (event.key === "ArrowLeft") changeDay(-1);
         });
 
-        function loadDSS() {
-            const timestamp = new Date().getTime();
-            let basePath = window.location.pathname;
-            if (!basePath.endsWith('/')) { basePath += '/'; }
-            
-            fetch(`${basePath}public/dss_bulletin.html?v=${timestamp}`)
-                .then(response => response.text())
-                .then(data => { document.getElementById("dssContent").innerHTML = data; })
-                .catch(error => { document.getElementById("dssContent").innerHTML = "DSS Bulletin currently unavailable."; });
-        }
-
         function loadTopTimestamp() {
             const cacheBuster = new Date().getTime();
             let basePath = window.location.pathname;
             if (!basePath.endsWith('/')) { basePath += '/'; }
             
             fetch(`${basePath}public/timestamp.txt?v=${cacheBuster}`)
-                .then(response => response.text())
+                .then(response => {
+                    if (!response.ok) throw new Error("Not found");
+                    return response.text();
+                })
                 .then(data => { document.getElementById("topTimestamp").innerText = data; })
                 .catch(error => { document.getElementById("topTimestamp").innerText = "Timestamp unavailable"; });
+        }
+
+        function loadDSS() {
+            const cacheBuster = new Date().getTime();
+            let basePath = window.location.pathname;
+            if (!basePath.endsWith('/')) { basePath += '/'; }
+            
+            fetch(`${basePath}public/dss_bulletin.html?v=${cacheBuster}`)
+                .then(response => {
+                    if (!response.ok) throw new Error("Not found");
+                    return response.text();
+                })
+                .then(data => { document.getElementById("dssContent").innerHTML = data; })
+                .catch(error => { document.getElementById("dssContent").innerHTML = "<p style='color:red;'>DSS Bulletin currently generating or unavailable.</p>"; });
         }
 
         function loadQuickLookPanel() {
