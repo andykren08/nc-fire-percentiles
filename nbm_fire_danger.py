@@ -308,15 +308,15 @@ def process_nbm():
 
             # 1. Native NBM Worst-Case
             worst_case = calculate_fire_danger(rh_10, wind_90, gust_90)
-            generate_prob_plot(worst_case, lats, lons, day, "worst", "NBM Worst-Case (10% RH / 90% Wind)", init_time, fhr)
+            generate_prob_plot(worst_case, lats, lons, day, "worst", "Worst-Case (10% RH / 90% Wind)", init_time, fhr)
             
             # 2. Native NBM Expected (Median)
             median_case = calculate_fire_danger(rh_50, wind_50, gust_50)
-            generate_prob_plot(median_case, lats, lons, day, "median", "NBM Expected (50th Percentile)", init_time, fhr)
+            generate_prob_plot(median_case, lats, lons, day, "median", "Expected (50th Percentile)", init_time, fhr)
 
             # 3. Native NBM Best-Case
             best_case = calculate_fire_danger(rh_90, wind_10, gust_10)
-            generate_prob_plot(best_case, lats, lons, day, "best", "NBM Best-Case (90% RH / 10% Wind)", init_time, fhr)
+            generate_prob_plot(best_case, lats, lons, day, "best", "Best-Case (90% RH / 10% Wind)", init_time, fhr)
 
             valid_time = init_time + timedelta(hours=fhr) 
             lons_180 = np.where(lons > 180, lons - 360, lons)
