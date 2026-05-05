@@ -34,6 +34,9 @@ lon_min, lon_max = -85.5, -73.5
 
 os.makedirs('public/images', exist_ok=True)
 
+# --- GLOBAL DSS SCOREBOARD ---
+dss_data = {day: {'ndfd': 0, 'nbm_worst': 0, 'date_str': ''} for day in range(1, 8)}
+
 # --- 2. FIRE DANGER MATH ---
 def calculate_fire_danger(rh, wind, gust):
     """
