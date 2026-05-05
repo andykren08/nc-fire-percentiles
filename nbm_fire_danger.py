@@ -133,11 +133,11 @@ def generate_prob_plot(plot_data, lats, lons, day, scenario, title_text, init_ti
     plt.savefig(temp_filename, bbox_inches='tight', dpi=150)
     plt.close()
 
-    # NWS Logo Composite Logic (Assuming you have nws_logo.png)
+    # NWS Logo Composite Logic (Assuming you have image_0.png)
     try:
         from PIL import Image
         base_img = Image.open(temp_filename)
-        logo = Image.open("nws_logo.png").convert("RGBA")
+        logo = Image.open("image_0.png").convert("RGBA")
         logo_height = 120
         aspect_ratio = logo.width / logo.height
         logo_width = int(logo_height * aspect_ratio)
