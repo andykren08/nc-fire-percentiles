@@ -242,7 +242,6 @@ def process_nbm():
         fhr = base_fhr + (day - 1) * 24
         file_name = f"blend.t{hour_str}z.qmd.f{fhr:03d}.co.grib2"
         
-       # FIXED FILTER: Grab all variables, but restrict it geographically to NC!
         filter_url = (
             f"https://nomads.ncep.noaa.gov/cgi-bin/filter_blend.pl"
             f"?file={file_name}&all_lev=on&all_var=on"
@@ -255,83 +254,67 @@ def process_nbm():
             print(f"Downloading NBM QMD Day {day} (F{fhr:03d}) via NOMADS grib_filter...")
             resp = requests.get(filter_url, timeout=60)
             
-            # If the file is too small, it's an HTML error page from NOMADS
             if resp.status_code != 200 or len(resp.content) < 1000: 
                 print(f" -> Day {day} unavailable on NOMADS or filter blocked.")
-                print(f" -> NOMADS Message: {resp.text[:250]}") # Shows us the exact error!
                 continue
                 
             with open(file_name, 'wb') as f:
                 f.write(resp.content)
             
-            # Use WGRIB2 to build the NetCDF
-            nc_file = f"{file_name}.nc"
-            subprocess.run(['wgrib2', file_name, '-netcdf', nc_file], check=True, capture_output=True)
+            # --- THE BRILLIANT FIX: ISOLATE BEFORE CONVERTING ---
+            p10_nc = f"{file_name}_10.nc"
+            p50_nc = f"{file_name}_50.nc"
+            p90_nc = f"{file_name}_90.nc"
             
-            ds = xr.open_dataset(nc_file)
-            
-            rh_10 = rh_50 = rh_90 = None
-            wind_10 = wind_50 = wind_90 = None
-            gust_10 = gust_50 = gust_90 = None
-            
-            lats = ds.latitude.values
-            lons = ds.longitude.values
+            # Search the GRIB file for the specific percentile string, and export it independently
+            subprocess.run(['wgrib2', file_name, '-match', ':10%', '-netcdf', p10_nc], capture_output=True)
+            subprocess.run(['wgrib2', file_name, '-match', ':50%', '-netcdf', p50_nc], capture_output=True)
+            subprocess.run(['wgrib2', file_name, '-match', ':90%', '-netcdf', p90_nc], capture_output=True)
 
-            # --- THE SMART VARIABLE SCRUBBER ---
-            for var in ds.data_vars:
-                da = ds[var]
-                var_name = str(var).lower()
-                desc = str(da.attrs.get('long_name', '')).lower()
-                
-                # Skip basic coordinates
-                if var_name in ['lat', 'lon', 'latitude', 'longitude', 'time']: continue
-                
-                val = da.values
-                if val.ndim >= 3: val = val[0] 
-                if val.ndim >= 3: val = val[0] 
-                
-                # Scrub out height indicators so '10m' wind doesn't falsely trigger the 10% logic
-                search_str = f"{var_name} {desc}".replace('10m', '').replace('10 m', '').replace('2m', '').replace('2 m', '')
-                
-                # RH Parser
-                if 'rh' in var_name or 'relative humidity' in desc:
-                    if '10' in search_str: rh_10 = val
-                    elif '50' in search_str: rh_50 = val
-                    elif '90' in search_str: rh_90 = val
-                
-                # Wind Parser
-                elif 'wind' in var_name or 'wspd' in var_name:
-                    if '10' in search_str: wind_10 = val * 2.23694
-                    elif '50' in search_str: wind_50 = val * 2.23694
-                    elif '90' in search_str: wind_90 = val * 2.23694
-                
-                # Gust Parser
-                elif 'gust' in var_name:
-                    if '10' in search_str: gust_10 = val * 2.23694
-                    elif '50' in search_str: gust_50 = val * 2.23694
-                    elif '90' in search_str: gust_90 = val * 2.23694
+            # Helper function to safely read our isolated files
+            def extract_vars(nc_path):
+                r = w = g = None
+                la = lo = None
+                if os.path.exists(nc_path):
+                    try:
+                        ds = xr.open_dataset(nc_path)
+                        la = ds.latitude.values
+                        lo = ds.longitude.values
+                        for var in ds.data_vars:
+                            var_name = str(var).lower()
+                            val = ds[var].values
+                            if val.ndim >= 3: val = val[0]
+                            if val.ndim >= 3: val = val[0]
+                            
+                            if 'rh' in var_name: r = val
+                            elif 'wind' in var_name or 'wspd' in var_name: w = val * 2.23694
+                            elif 'gust' in var_name: g = val * 2.23694
+                        ds.close()
+                    except: pass
+                return r, w, g, la, lo
 
-            # --- DIAGNOSTIC DEBUG TOOL ---
+            # Extract the specific arrays!
+            rh_10, wind_10, gust_10, lats, lons = extract_vars(p10_nc)
+            rh_50, wind_50, gust_50, _, _ = extract_vars(p50_nc)
+            rh_90, wind_90, gust_90, _, _ = extract_vars(p90_nc)
+
             if None in [rh_10, wind_90]:
                 print(f" -> Missing required QMD percentile data for Day {day}")
-                print("DEBUG: Here are the exact variable formats generated by wgrib2:")
-                for v in ds.data_vars:
-                    print(f"  - {v}: {ds[v].dims} | {ds[v].attrs.get('long_name', '')}")
-                ds.close()
                 continue
-
-            ds.close() 
 
             if gust_90 is None: gust_90 = wind_90
             if gust_50 is None: gust_50 = wind_50
             if gust_10 is None: gust_10 = wind_10
 
+            # 1. Native NBM Worst-Case
             worst_case = calculate_fire_danger(rh_10, wind_90, gust_90)
             generate_prob_plot(worst_case, lats, lons, day, "worst", "NBM Worst-Case (10% RH / 90% Wind)", init_time, fhr)
             
+            # 2. Native NBM Expected (Median)
             median_case = calculate_fire_danger(rh_50, wind_50, gust_50)
             generate_prob_plot(median_case, lats, lons, day, "median", "NBM Expected (50th Percentile)", init_time, fhr)
 
+            # 3. Native NBM Best-Case
             best_case = calculate_fire_danger(rh_90, wind_10, gust_10)
             generate_prob_plot(best_case, lats, lons, day, "best", "NBM Best-Case (90% RH / 10% Wind)", init_time, fhr)
 
@@ -342,8 +325,6 @@ def process_nbm():
             dss_data[day]['nbm_worst'] = int(np.max(worst_case[nc_mask]))
             dss_data[day]['date_str'] = valid_time.strftime('%A, %b %d')
 
-        except subprocess.CalledProcessError as e:
-            print(f"wgrib2 conversion failed for Day {day}: {e.stderr.decode()}")
         except Exception as e:
             print(f"Error processing NBM QMD Day {day}: {e}")
             
