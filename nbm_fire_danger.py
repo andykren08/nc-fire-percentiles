@@ -208,7 +208,6 @@ def process_nbm():
     now = datetime.utcnow()
     valid_cycle_found = False
     
-    # NBM QMD files generate at 00, 06, 12, 18Z
     for hours_back in range(0, 48):
         check_time = now - timedelta(hours=hours_back)
         cycle_hour = (check_time.hour // 6) * 6 
@@ -234,7 +233,6 @@ def process_nbm():
     base_fhr = 21 - cycle_hour
     if base_fhr < 0: base_fhr += 24
     
-    # NOMADS bounding box for NC
     nomads_left = 360 + lon_min - 1.0
     nomads_right = 360 + lon_max + 1.0
     nomads_top = lat_max + 1.0
@@ -244,11 +242,11 @@ def process_nbm():
         fhr = base_fhr + (day - 1) * 24
         file_name = f"blend.t{hour_str}z.qmd.f{fhr:03d}.co.grib2"
         
-        # TARGETED FILTER: Only grab NC, and only grab RH, WIND, and GUST!
+        # FIXED FILTER: 'all_lev' prevents deleting data, and we explicitly ask for MINRH
         filter_url = (
             f"https://nomads.ncep.noaa.gov/cgi-bin/filter_blend.pl"
-            f"?file={file_name}&lev_10_m_above_ground=on&lev_2_m_above_ground=on"
-            f"&var_GUST=on&var_RH=on&var_WIND=on"
+            f"?file={file_name}&all_lev=on"
+            f"&var_GUST=on&var_RH=on&var_MINRH=on&var_WIND=on&var_WSPD=on"
             f"&subregion=on&leftlon={nomads_left}&rightlon={nomads_right}"
             f"&toplat={nomads_top}&bottomlat={nomads_bottom}"
             f"&dir=%2Fblend.{date_str}%2F{hour_str}%2Fqmd"
@@ -265,11 +263,10 @@ def process_nbm():
             with open(file_name, 'wb') as f:
                 f.write(resp.content)
             
-            # --- USE WGRIB2 TO DECODE THE PERCENTILES ---
+            # Use WGRIB2 to build the NetCDF
             nc_file = f"{file_name}.nc"
             subprocess.run(['wgrib2', file_name, '-netcdf', nc_file], check=True, capture_output=True)
             
-            # Open the clean NetCDF file with xarray
             ds = xr.open_dataset(nc_file)
             
             rh_10 = rh_50 = rh_90 = None
@@ -279,58 +276,64 @@ def process_nbm():
             lats = ds.latitude.values
             lons = ds.longitude.values
 
-            # Safely search through the variables for our percentiles
+            # --- THE SMART VARIABLE SCRUBBER ---
             for var in ds.data_vars:
                 da = ds[var]
-                var_name = var.lower()
-                desc = da.attrs.get('long_name', '').lower()
+                var_name = str(var).lower()
+                desc = str(da.attrs.get('long_name', '')).lower()
                 
-                # wgrib2 NetCDF arrays usually have a time dimension at the front, extract the 2D grid
+                # Skip basic coordinates
+                if var_name in ['lat', 'lon', 'latitude', 'longitude', 'time']: continue
+                
                 val = da.values
-                if val.ndim == 3: val = val[0]
-                elif val.ndim == 4: val = val[0, 0]
-
-                # Match RH
+                if val.ndim >= 3: val = val[0] 
+                if val.ndim >= 3: val = val[0] 
+                
+                # Scrub out height indicators so '10m' wind doesn't falsely trigger the 10% logic
+                search_str = f"{var_name} {desc}".replace('10m', '').replace('10 m', '').replace('2m', '').replace('2 m', '')
+                
+                # RH Parser
                 if 'rh' in var_name or 'relative humidity' in desc:
-                    if '10%' in desc or '_10' in var_name: rh_10 = val
-                    elif '50%' in desc or '_50' in var_name: rh_50 = val
-                    elif '90%' in desc or '_90' in var_name: rh_90 = val
+                    if '10' in search_str: rh_10 = val
+                    elif '50' in search_str: rh_50 = val
+                    elif '90' in search_str: rh_90 = val
                 
-                # Match Wind
-                elif 'wind' in var_name and ('speed' in desc or 'wspd' in var_name):
-                    if '10%' in desc or '_10' in var_name: wind_10 = val * 2.23694
-                    elif '50%' in desc or '_50' in var_name: wind_50 = val * 2.23694
-                    elif '90%' in desc or '_90' in var_name: wind_90 = val * 2.23694
+                # Wind Parser
+                elif 'wind' in var_name or 'wspd' in var_name:
+                    if '10' in search_str: wind_10 = val * 2.23694
+                    elif '50' in search_str: wind_50 = val * 2.23694
+                    elif '90' in search_str: wind_90 = val * 2.23694
                 
-                # Match Gust
+                # Gust Parser
                 elif 'gust' in var_name:
-                    if '10%' in desc or '_10' in var_name: gust_10 = val * 2.23694
-                    elif '50%' in desc or '_50' in var_name: gust_50 = val * 2.23694
-                    elif '90%' in desc or '_90' in var_name: gust_90 = val * 2.23694
+                    if '10' in search_str: gust_10 = val * 2.23694
+                    elif '50' in search_str: gust_50 = val * 2.23694
+                    elif '90' in search_str: gust_90 = val * 2.23694
 
-            ds.close() # Close memory so the files can be deleted!
-
+            # --- DIAGNOSTIC DEBUG TOOL ---
             if None in [rh_10, wind_90]:
                 print(f" -> Missing required QMD percentile data for Day {day}")
+                print("DEBUG: Here are the exact variable formats generated by wgrib2:")
+                for v in ds.data_vars:
+                    print(f"  - {v}: {ds[v].dims} | {ds[v].attrs.get('long_name', '')}")
+                ds.close()
                 continue
+
+            ds.close() 
 
             if gust_90 is None: gust_90 = wind_90
             if gust_50 is None: gust_50 = wind_50
             if gust_10 is None: gust_10 = wind_10
 
-            # 1. Native NBM Worst-Case
             worst_case = calculate_fire_danger(rh_10, wind_90, gust_90)
             generate_prob_plot(worst_case, lats, lons, day, "worst", "NBM Worst-Case (10% RH / 90% Wind)", init_time, fhr)
             
-            # 2. Native NBM Expected (Median)
             median_case = calculate_fire_danger(rh_50, wind_50, gust_50)
             generate_prob_plot(median_case, lats, lons, day, "median", "NBM Expected (50th Percentile)", init_time, fhr)
 
-            # 3. Native NBM Best-Case
             best_case = calculate_fire_danger(rh_90, wind_10, gust_10)
             generate_prob_plot(best_case, lats, lons, day, "best", "NBM Best-Case (90% RH / 10% Wind)", init_time, fhr)
 
-            # --- RECORD NBM WORST-CASE SCORE TO SCOREBOARD ---
             valid_time = init_time + timedelta(hours=fhr) 
             lons_180 = np.where(lons > 180, lons - 360, lons)
             nc_mask = (lats >= lat_min) & (lats <= lat_max) & (lons_180 >= lon_min) & (lons_180 <= lon_max)
