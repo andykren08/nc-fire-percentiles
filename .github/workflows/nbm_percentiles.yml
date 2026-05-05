@@ -28,8 +28,17 @@ jobs:
     - name: Checkout Repository
       uses: actions/checkout@v4
 
-    - name: Install wgrib2 (NOAA GRIB Decoder)
-      run: sudo apt-get update && sudo apt-get install -y wgrib2
+    - name: Compile and Install NOAA wgrib2
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential gfortran
+        wget https://ftp.cpc.ncep.noaa.gov/wd51we/wgrib2/wgrib2.tgz
+        tar -xzf wgrib2.tgz
+        cd grib2
+        export CC=gcc
+        export FC=gfortran
+        make
+        sudo cp wgrib2/wgrib2 /usr/local/bin/wgrib2
 
     - name: Set up Python
       uses: actions/setup-python@v5
