@@ -298,7 +298,7 @@ def process_nbm():
             rh_50, wind_50, gust_50, _, _ = extract_vars(p50_nc)
             rh_90, wind_90, gust_90, _, _ = extract_vars(p90_nc)
 
-            if None in [rh_10, wind_90]:
+            if rh_10 is None or wind_90 is None:
                 print(f" -> Missing required QMD percentile data for Day {day}")
                 continue
 
