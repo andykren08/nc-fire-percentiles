@@ -439,7 +439,6 @@ def process_ndfd():
                 generate_prob_plot(official_case, lats, lons, day, "official", "Official NWS Forecast (NDFD)", plot_time_utc, 0)
                 
             else:
-               else:
                 # --- NEW: ANTI-CRASH FALLBACK ---
                 # Generate a safe, blank map so the HTML dropdown doesn't show a broken image!
                 print(f" -> No daytime data left on server for Day {day}. Generating safe blank map.")
