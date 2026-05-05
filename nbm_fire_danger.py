@@ -429,13 +429,24 @@ def process_ndfd():
                 daily_gust_mph = daily_gust * 2.23694
                 
                 official_case = calculate_fire_danger(daily_rh, daily_wind_mph, daily_gust_mph)
+                
+                # --- RECORD NDFD SCORE ---
+                lons_180 = np.where(lons > 180, lons - 360, lons)
+                nc_mask = (lats >= lat_min) & (lats <= lat_max) & (lons_180 >= lon_min) & (lons_180 <= lon_max)
+                dss_data[day]['ndfd'] = int(np.max(official_case[nc_mask]))
+                
                 plot_time_utc = datetime(target_date.year, target_date.month, target_date.day, 21, 0)
                 generate_prob_plot(official_case, lats, lons, day, "official", "Official NWS Forecast (NDFD)", plot_time_utc, 0)
                 
             else:
+               else:
                 # --- NEW: ANTI-CRASH FALLBACK ---
                 # Generate a safe, blank map so the HTML dropdown doesn't show a broken image!
                 print(f" -> No daytime data left on server for Day {day}. Generating safe blank map.")
+                
+                # --- RECORD SCORE AS ZERO ---
+                dss_data[day]['ndfd'] = 0 
+                
                 if lats is not None:
                     dummy_rh = np.ones_like(lats) * 100  # Force 100% RH
                     dummy_wind = np.zeros_like(lats)     # Force 0 mph Wind
@@ -456,6 +467,56 @@ def process_ndfd():
         try: os.remove(junk)
         except: pass
 
+# --- 6. GENERATE FINAL DSS BULLETIN ---
+def generate_dss_bulletin():
+    from zoneinfo import ZoneInfo
+    from datetime import datetime
+    
+    print("--- Generating Unified DSS Text Bulletin ---")
+    dss_lines = []
+    
+    for day in range(1, 8):
+        ndfd_lvl = dss_data[day]['ndfd']
+        worst_lvl = dss_data[day]['nbm_worst']
+        day_name = dss_data[day]['date_str']
+        
+        if not day_name: continue 
+        if ndfd_lvl == 0 and worst_lvl == 0: continue 
+        
+        if ndfd_lvl == 4:
+            status = f"<strong>Day {day} ({day_name}): EXTREME (Official).</strong> Official NWS forecast expects extreme criteria with critically low RH and damaging winds."
+        elif ndfd_lvl == 3:
+            status = f"<strong>Day {day} ({day_name}): High / RFW (Official).</strong> Official NWS forecast reaches Red Flag Warning criteria."
+            if worst_lvl == 4: status += " <em>Note: The worst-case scenario shows localized EXTREME fire behavior is possible.</em>"
+        elif ndfd_lvl == 2:
+            status = f"<strong>Day {day} ({day_name}): Mod / IFD (Official).</strong> Official NWS forecast reaches Increased Fire Danger criteria."
+            if worst_lvl >= 3: status += " <em>Note: The worst-case scenario shows potential for localized Red Flag conditions if winds overperform.</em>"
+        elif ndfd_lvl == 1:
+            status = f"<strong>Day {day} ({day_name}): Low (Official).</strong> Breezy and dry conditions expected, but official forecast remains below IFD thresholds."
+            if worst_lvl >= 2: status += " <em>Note: The worst-case scenario indicates IFD or Red Flag conditions cannot be completely ruled out.</em>"
+        else:
+            status = f"<strong>Day {day} ({day_name}): Expected None.</strong> Official forecast remains below elevated thresholds."
+            if worst_lvl >= 2: status += " <em>Note: The worst-case scenario indicates localized elevated conditions (IFD) cannot be entirely ruled out.</em>"
+            elif worst_lvl == 1: status += " <em>Note: The worst-case scenario indicates localized Low fire danger is possible.</em>"
+            
+        dss_lines.append(f"<li>{status}</li>")
+
+    now_time = datetime.now(ZoneInfo("America/New_York")).strftime('%A, %B %d, %Y at %I:%M %p %Z')
+    
+    with open('public/timestamp.txt', 'w') as f:
+        f.write(f"Last Refreshed: {now_time}")
+        
+    with open('public/dss_bulletin.html', 'w') as f:
+        f.write(f"<p style='color: #0056b3; font-weight: bold; text-align: left; margin-top: 0; border-bottom: 1px solid #ddd; padding-bottom: 8px;'>Data Last Refreshed: {now_time}</p>\n")
+        
+        if len(dss_lines) == 0:
+            f.write("<p style='text-align: left; font-weight: bold; color: #2e7d32; padding: 10px 0;'>No elevated fire weather threats expected over the next 7 days.</p>\n")
+        else:
+            f.write("<ul style='text-align: left; line-height: 1.6;'>\n" + "\n".join(dss_lines) + "\n</ul>\n")
+            
+        f.write("<p style='font-size: 12px; color: gray; text-align: left; margin-top: 15px;'><em>*Disclaimer: This automated guidance evaluates meteorological conditions only and does not account for local fuel moisture (ERC). Consult official NWS forecasts for operational decisions.</em></p>")
+
 if __name__ == "__main__":
     process_nbm()
     process_ndfd()
+    generate_dss_bulletin()
