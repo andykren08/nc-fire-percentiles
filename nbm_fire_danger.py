@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
+from metpy.plots import USCOUNTIES
 
 # --- 1. CONFIGURATION & THRESHOLDS ---
 # NC Extreme (PDS Red Flag)
@@ -75,7 +76,7 @@ def generate_prob_plot(plot_data, lats, lons, day, scenario, title_text, init_ti
     
     ax.set_extent([LON_MIN, LON_MAX, LAT_MIN, LAT_MAX], crs=ccrs.PlateCarree())
     ax.add_feature(cfeature.STATES.with_scale('50m'), linewidth=1.5, edgecolor='black')
-    ax.add_feature(cfeature.USCOUNTIES.with_scale('5m'), linewidth=0.5, edgecolor='gray')
+    ax.add_feature(USCOUNTIES.with_scale('5m'), linewidth=0.5, edgecolor='gray')
     
     # 5 colors: Transparent, Bright Yellow, Deep Orange, Crimson Red, Vivid Purple
     cmap = ListedColormap(['#FFFFFF00', '#FFFF00', '#FF6600', '#CC0000', '#9900CC']) 
