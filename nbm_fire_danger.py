@@ -11,7 +11,7 @@ import cartopy.feature as cfeature
 
 # --- 1. CONFIGURATION & THRESHOLDS ---
 # NC Extreme (PDS Red Flag)
-EXTREME_RH = 20.0
+EXTREME_RH = 25.0
 EXTREME_WIND = 25.0
 EXTREME_GUST = 35.0
 
@@ -196,52 +196,67 @@ def generate_prob_plot(plot_data, lats, lons, day, scenario, title_text, init_ti
         # Cleanup the temporary base image
         if os.path.exists(temp_filename):
             os.remove(temp_filename)
-            
-# --- 4. MAIN PROCESSING LOOP ---
+
+# --- 4. MAIN PROCESSING LOOP (NBM PROBABILISTIC QMD) ---
 def process_nbm():
-    print("--- Hunting for NBM Core Cycles (7-Day Strategic Outlook) ---")
+    print("--- Hunting for NBM QMD Cycles (Probabilistic Forecast) ---")
     now = datetime.utcnow()
     valid_cycle_found = False
     
+    # NBM QMD (Percentile) files are only generated every 6 hours (00, 06, 12, 18Z)
     for hours_back in range(0, 48):
         check_time = now - timedelta(hours=hours_back)
-        cycle_hour = (check_time.hour // 6) * 6
+        cycle_hour = (check_time.hour // 6) * 6 
         
         date_str = check_time.strftime("%Y%m%d")
         hour_str = f"{cycle_hour:02d}"
         
-        test_url = f"https://noaa-nbm-grib2-pds.s3.amazonaws.com/blend.{date_str}/{hour_str}/core/blend.t{hour_str}z.core.f012.co.grib2"
+        # We ping AWS just to verify the cycle has finished uploading, since it's faster
+        test_url = f"https://noaa-nbm-grib2-pds.s3.amazonaws.com/blend.{date_str}/{hour_str}/qmd/blend.t{hour_str}z.qmd.f012.co.grib2.idx"
         
         try:
-            if requests.head(test_url, timeout=10).status_code == 200:
-                print(f"Success! Locked onto fresh NBM Core Cycle: {date_str} at {hour_str}Z")
+            if requests.head(test_url, timeout=5).status_code == 200:
+                print(f"Success! Locked onto fresh NBM QMD Cycle: {date_str} at {hour_str}Z")
                 valid_cycle_found = True
                 break
         except: pass 
 
     if not valid_cycle_found:
-        print("CRITICAL: Could not find any uploaded NBM cycles.")
+        print("CRITICAL: Could not find any uploaded NBM QMD cycles.")
         return
 
     init_time = datetime(check_time.year, check_time.month, check_time.day, cycle_hour, 0)
-    base_url = f"https://noaa-nbm-grib2-pds.s3.amazonaws.com/blend.{date_str}/{hour_str}/core"
     
     base_fhr = 21 - cycle_hour
     if base_fhr < 0: base_fhr += 24
-
-    dss_lines = []
+    
+    # NOMADS grib_filter requires 0-360 longitudes. We add a 1-degree buffer around NC.
+    nomads_left = 360 + LON_MIN - 1.0
+    nomads_right = 360 + LON_MAX + 1.0
+    nomads_top = LAT_MAX + 1.0
+    nomads_bottom = LAT_MIN - 1.0
     
     for day in range(1, 8):
         fhr = base_fhr + (day - 1) * 24
-        file_name = f"blend.t{hour_str}z.core.f{fhr:03d}.co.grib2"
-        file_url = f"{base_url}/{file_name}"
-        datasets = []
+        file_name = f"blend.t{hour_str}z.qmd.f{fhr:03d}.co.grib2"
         
+        # Construct the NOMADS grib_filter URL to drastically reduce RAM usage
+        filter_url = (
+            f"https://nomads.ncep.noaa.gov/cgi-bin/filter_blend.pl"
+            f"?file={file_name}&all_lev=on&all_var=on"
+            f"&subregion=on&leftlon={nomads_left}&rightlon={nomads_right}"
+            f"&toplat={nomads_top}&bottomlat={nomads_bottom}"
+            f"&dir=%2Fblend.{date_str}%2F{hour_str}%2Fqmd"
+        )
+        
+        datasets = []
         try:
-            print(f"Downloading Day {day} (F{fhr:03d})...")
-            resp = requests.get(file_url, timeout=30)
-            if resp.status_code != 200: 
-                print(f" -> Day {day} not available.")
+            print(f"Downloading NBM QMD Day {day} (F{fhr:03d}) via NOMADS grib_filter...")
+            resp = requests.get(filter_url, timeout=60)
+            
+            # NOMADS returns HTML errors if the file isn't ready or filter fails
+            if resp.status_code != 200 or len(resp.content) < 1000: 
+                print(f" -> Day {day} unavailable on NOMADS or filter blocked.")
                 continue
                 
             with open(file_name, 'wb') as f:
@@ -249,89 +264,67 @@ def process_nbm():
                 
             datasets = cfgrib.open_datasets(file_name)
             
-            rh_det = wind_det = gust_det = lats = lons = None
+            rh_10 = rh_50 = rh_90 = None
+            wind_10 = wind_50 = wind_90 = None
+            gust_10 = gust_50 = gust_90 = None
+            lats = lons = None
 
             for d in datasets:
                 if lats is None and 'latitude' in d.coords:
                     lats = d.latitude.values
                     lons = d.longitude.values
-                elif lats is None and 'lat' in d.coords:
-                    lats = d.lat.values
-                    lons = d.lon.values
 
+                # cfgrib handles NBM percentiles differently depending on the version.
+                # It usually stores them as a scalar coordinate.
                 for var in d.data_vars:
-                    if var in ['r2', 'rh', '2r', 'rh2m']: rh_det = d[var].values
-                    if var in ['si10', 'wspd', '10si', 'wind']: wind_det = d[var].values
-                    if var in ['gust', 'maxg']: gust_det = d[var].values
+                    # Is there a percentile attached to this specific variable block?
+                    if 'percentile' in d.coords:
+                        p = int(d.percentile.values)
+                        if p in [10, 50, 90]:
+                            val = d[var].values
+                            if var in ['r2', 'rh', '2r', 'rh2m', 'minrh']:
+                                if p == 10: rh_10 = val
+                                if p == 50: rh_50 = val
+                                if p == 90: rh_90 = val
+                            elif var in ['si10', 'wspd', '10si', 'wind']:
+                                if p == 10: wind_10 = val * 2.23694
+                                if p == 50: wind_50 = val * 2.23694
+                                if p == 90: wind_90 = val * 2.23694
+                            elif var in ['gust', 'maxg']:
+                                if p == 10: gust_10 = val * 2.23694
+                                if p == 50: gust_50 = val * 2.23694
+                                if p == 90: gust_90 = val * 2.23694
 
-            if rh_det is None or wind_det is None:
-                print(f" -> Could not find standard RH/Wind for Day {day}")
+            if None in [rh_10, wind_90]:
+                print(f" -> Missing required QMD percentile data for Day {day}")
                 continue
 
-            if gust_det is None: gust_det = wind_det
+            if gust_90 is None: gust_90 = wind_90
+            if gust_50 is None: gust_50 = wind_50
+            if gust_10 is None: gust_10 = wind_10
 
-            wind_det = ms_to_mph(wind_det)
-            gust_det = ms_to_mph(gust_det)
-
-            # SIMULATE PROPORTIONAL SPREAD
-            rh_10 = np.clip(rh_det * 0.8, 5, 100) 
-            rh_90 = np.clip(rh_det * 1.2, 5, 100) 
-            
-            wind_10 = np.clip(wind_det * 0.6, 0, 100)
-            wind_90 = wind_det * 1.4                  
-            gust_90 = gust_det * 1.4
-
-            # 1. Worst-Case
+            # 1. Native NBM Worst-Case (10th Percentile RH, 90th Percentile Wind)
             worst_case = calculate_fire_danger(rh_10, wind_90, gust_90)
-            generate_prob_plot(worst_case, lats, lons, day, "worst", "Worst-Case Scenario (Low RH / High Wind)", init_time, fhr)
+            generate_prob_plot(worst_case, lats, lons, day, "worst", "NBM Worst-Case (10% RH / 90% Wind)", init_time, fhr)
             
-            # 2. Expected (Median)
-            median_case = calculate_fire_danger(rh_det, wind_det, gust_det)
-            generate_prob_plot(median_case, lats, lons, day, "median", "Expected Scenario (Median Forecast)", init_time, fhr)
+            # 2. Native NBM Expected (Median)
+            median_case = calculate_fire_danger(rh_50, wind_50, gust_50)
+            generate_prob_plot(median_case, lats, lons, day, "median", "NBM Expected (50th Percentile)", init_time, fhr)
 
-            # 3. Best-Case
-            best_case = calculate_fire_danger(rh_90, wind_10, wind_10)
-            generate_prob_plot(best_case, lats, lons, day, "best", "Best-Case Scenario (High RH / Low Wind)", init_time, fhr)
+            # 3. Native NBM Best-Case (90th Percentile RH, 10th Percentile Wind)
+            best_case = calculate_fire_danger(rh_90, wind_10, gust_10)
+            generate_prob_plot(best_case, lats, lons, day, "best", "NBM Best-Case (90% RH / 10% Wind)", init_time, fhr)
 
-        # --- AUTOMATED DSS BULLETIN LOGIC ---
+            # --- RECORD NBM WORST-CASE SCORE TO THE NEW SCOREBOARD ---
             valid_time = init_time + timedelta(hours=fhr) 
-            
             lons_180 = np.where(lons > 180, lons - 360, lons)
-            nc_mask = (lats >= lat_min) & (lats <= lat_max) & (lons_180 >= lon_min) & (lons_180 <= lon_max)
+            nc_mask = (lats >= LAT_MIN) & (lats <= LAT_MAX) & (lons_180 >= LON_MIN) & (lons_180 <= LON_MAX)
             
-            max_median = np.max(median_case[nc_mask])
-            max_worst = np.max(worst_case[nc_mask])
-            
-            day_name = valid_time.strftime('%A, %b %d')
+            dss_data[day]['nbm_worst'] = int(np.max(worst_case[nc_mask]))
+            dss_data[day]['date_str'] = valid_time.strftime('%A, %b %d')
 
-            # EXCEPTION-BASED REPORTING: Only generate text if there is a threat
-            if max_median == 0 and max_worst == 0:
-                pass # Completely green day, skip adding it to the bulletin
-            else:
-                if max_median == 4:
-                    status = f"<strong>Day {day} ({day_name}): EXTREME (PDS Red Flag Threat).</strong> Expected forecast reaches extreme criteria with critically low RH and gusty winds."
-                elif max_median == 3:
-                    status = f"<strong>Day {day} ({day_name}): High (Red Flag Threat).</strong> Expected forecast reaches RFW criteria during peak heating."
-                    if max_worst == 4:
-                        status += " <em>Note: The worst-case scenario shows localized EXTREME fire behavior is possible if winds overperform.</em>"
-                elif max_median == 2:
-                    status = f"<strong>Day {day} ({day_name}): Mod (IFD).</strong> Expected forecast reaches Increased Fire Danger criteria."
-                    if max_worst >= 3:
-                        status += " <em>Note: The worst-case scenario shows localized Red Flag conditions are possible if the environment trends drier/windier.</em>"
-                elif max_median == 1:
-                    status = f"<strong>Day {day} ({day_name}): Low.</strong> Breezy and dry conditions possible, but generally remaining below IFD thresholds."
-                    if max_worst >= 2:
-                        status += " <em>Note: The worst-case scenario shows IFD conditions cannot be completely ruled out.</em>"
-                else:
-                    # Handles cases where median is Green, but Worst-Case implies a threat
-                    status = f"<strong>Day {day} ({day_name}): None.</strong> Peak heating expected conditions are below thresholds."
-                    if max_worst >= 1:
-                        status += " <em>Note: The worst-case scenario indicates localized Low/Elevated conditions cannot be entirely ruled out.</em>"
-                
-                dss_lines.append(f"<li>{status}</li>")
-            
         except Exception as e:
-            print(f"Error processing Day {day}: {e}")
+            print(f"Error processing NBM QMD Day {day}: {e}")
             
         finally:
             for d in datasets:
@@ -340,27 +333,6 @@ def process_nbm():
             for junk in glob.glob(f"{file_name}*"):
                 try: os.remove(junk)
                 except: pass
-
-    # --- SAVE THE DSS BULLETIN WITH TIMESTAMP ---
-    from zoneinfo import ZoneInfo
-    # Fetch the exact time the Action runs, localized to Eastern Time
-    now_time = datetime.now(ZoneInfo("America/New_York")).strftime('%A, %B %d, %Y at %I:%M %p %Z')
-    
-    # NEW: Save just the timestamp to a text file for the top of the website
-    with open('public/timestamp.txt', 'w') as f:
-        f.write(f"Last Refreshed: {now_time}")
-    
-    with open('public/dss_bulletin.html', 'w') as f:
-        # Add the Timestamp to the top of the DSS box
-        f.write(f"<p style='color: #0056b3; font-weight: bold; text-align: left; margin-top: 0; border-bottom: 1px solid #ddd; padding-bottom: 8px;'>Data Last Refreshed: {now_time}</p>\n")
-        
-        # If all 7 days were green, output an "All Clear" message
-        if len(dss_lines) == 0:
-            f.write("<p style='text-align: left; font-weight: bold; color: #2e7d32; padding: 10px 0;'>No elevated fire weather threats expected over the next 7 days.</p>\n")
-        else:
-            f.write("<ul style='text-align: left; line-height: 1.6;'>\n" + "\n".join(dss_lines) + "\n</ul>\n")
-            
-        f.write("<p style='font-size: 12px; color: gray; text-align: left; margin-top: 15px;'><em>*Disclaimer: This automated guidance evaluates meteorological conditions only and does not account for local fuel moisture (ERC). Consult official NWS forecasts for operational decisions.</em></p>")
 
 # --- 5. NDFD OFFICIAL FORECAST PROCESSING ---
 def process_ndfd():
