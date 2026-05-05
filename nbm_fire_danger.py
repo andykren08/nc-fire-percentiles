@@ -1,11 +1,14 @@
 import os
-import requests
-import numpy as np
-import xarray as xr
-import cfgrib
 import glob
-from datetime import datetime, timedelta
+import requests
+import cfgrib
+import numpy as np
+import pandas as pd
+import warnings
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 
@@ -29,10 +32,12 @@ LOW_RH = 35.0
 LOW_WIND = 15.0
 LOW_GUST = 20.0
 
-lat_min, lat_max = 32.5, 39.5
-lon_min, lon_max = -85.5, -73.5
+# NC Geographic Domain for DSS Max Value Searching
+LAT_MIN, LAT_MAX = 32.5, 39.5
+LON_MIN, LON_MAX = -85.5, -73.5
 
-os.makedirs('public/images', exist_ok=True)
+# --- GLOBAL DSS SCOREBOARD ---
+dss_data = {day: {'ndfd': 0, 'nbm_worst': 0, 'date_str': ''} for day in range(1, 8)}
 
 # --- 2. FIRE DANGER MATH ---
 def calculate_fire_danger(rh, wind, gust):
@@ -63,28 +68,15 @@ def calculate_fire_danger(rh, wind, gust):
     
     return danger_grid
 
-def ms_to_mph(ms):
-    return ms * 2.23694
-
-# --- 3. MAPPING ---
+# --- 3. PLOTTING ENGINE ---
 def generate_prob_plot(plot_data, lats, lons, day, scenario, title_text, init_time, fhr):
-    # Import PIL for image compositing (must be imported within the function)
-    from PIL import Image
-    import PIL.ImageOps
-
     fig = plt.figure(figsize=(14, 10))
     ax = plt.axes(projection=ccrs.PlateCarree())
-    ax.set_extent([lon_min, lon_max, lat_min, lat_max], crs=ccrs.PlateCarree())
-
-    ax.add_feature(cfeature.STATES, linewidth=1.5, edgecolor='black')
-    ax.add_feature(cfeature.COASTLINE, linewidth=1.0)
     
-    try:
-        from metpy.plots import USCOUNTIES
-        ax.add_feature(USCOUNTIES.with_scale('5m'), edgecolor='gray', linewidth=0.5)
-    except: pass
-
-    from matplotlib.colors import ListedColormap
+    ax.set_extent([LON_MIN, LON_MAX, LAT_MIN, LAT_MAX], crs=ccrs.PlateCarree())
+    ax.add_feature(cfeature.STATES.with_scale('50m'), linewidth=1.5, edgecolor='black')
+    ax.add_feature(cfeature.COUNTIES.with_scale('5m'), linewidth=0.5, edgecolor='gray')
+    
     # 5 colors: Transparent, Bright Yellow, Deep Orange, Crimson Red, Vivid Purple
     cmap = ListedColormap(['#FFFFFF00', '#FFFF00', '#FF6600', '#CC0000', '#9900CC']) 
     levels = [-0.5, 0.5, 1.5, 2.5, 3.5, 4.5]
@@ -97,39 +89,24 @@ def generate_prob_plot(plot_data, lats, lons, day, scenario, title_text, init_ti
     cbar.set_ticklabels(tick_labels)
     
     valid_time = init_time + timedelta(hours=fhr)
-    plt.title(f" {title_text}\nValid Peak Heating: {valid_time.strftime('%a %m/%d %H:00Z')} (Day {day})", fontsize=14, fontweight='bold')
+    plt.title(f"{title_text}\nValid Peak Heating: {valid_time.strftime('%a %m/%d %H:00Z')} (Day {day})", fontsize=14, fontweight='bold')
     
-    # Add NWS Raleigh text under the logo ---
-    ax.text(1.13, 0.83, "NWS Raleigh, NC", transform=ax.transAxes, fontsize=12, fontstyle='italic',
+    ax.text(1.03, 0.90, "NWS Raleigh, NC", transform=ax.transAxes, fontsize=12, fontstyle='italic',
             verticalalignment='top', color='#444444')
     
-    # Burn the threshold legend directly into the image
     legend_text = (
         "Threshold Criteria:\n\n"
         "Extreme:\nRH <= 20% AND\n(Wind >= 25 or Gust >= 35 mph)\n\n"
-        "High (Red Flag):\nRH <= 25% AND\n(Wind >= 20 or Gust >= 30 mph)\n\n"
+        "High (RFW):\nRH <= 25% AND\n(Wind >= 20 or Gust >= 30 mph)\n\n"
         "Mod (IFD):\nRH <= 30% AND\nGust >= 25 mph\n\n"
         "Low:\nRH <= 35% AND\n(Wind >= 15 or Gust >= 20 mph)"
     )
     
-    # Place text box slightly outside the right edge of the map
-    ax.text(1.03, 0.5, legend_text, transform=ax.transAxes, fontsize=10,
-            verticalalignment='center',
-            bbox=dict(boxstyle='round,pad=0.8', facecolor='#f8f9fa', edgecolor='gray', alpha=0.9))
-    
-    # Define filenames for the intermediate and final images
-    temp_filename = f"base_fire_danger_plot.png"
-    final_filename = f"public/images/nbm_{scenario}_fire_danger_day{day}.png"
-
-    # Step 1: Save the initial plot with all its legends.
-    # 'bbox_inches=tight' handles the dynamic text legend width.
-
-    # Place text box slightly outside the right edge of the map
     ax.text(1.03, 0.5, legend_text, transform=ax.transAxes, fontsize=10,
             verticalalignment='center',
             bbox=dict(boxstyle='round,pad=0.8', facecolor='#f8f9fa', edgecolor='gray', alpha=0.9))
             
-    # --- NEW: Plot Major North Carolina Cities ---
+    # Major North Carolina Cities
     cities = {
         'Asheville': (-82.5515, 35.5951),
         'Boone': (-81.6746, 36.2168),
@@ -145,193 +122,105 @@ def generate_prob_plot(plot_data, lats, lons, day, scenario, title_text, init_ti
     }
 
     for city, (lon, lat) in cities.items():
-        # Plot a small black dot for the city location
         ax.plot(lon, lat, marker='o', color='black', markersize=4, transform=ccrs.PlateCarree())
-        
-        # Add the city text label slightly offset from the dot
         ax.text(lon + 0.06, lat + 0.04, city, transform=ccrs.PlateCarree(),
                 fontsize=8, fontweight='bold', color='black',
                 bbox=dict(boxstyle='round,pad=0.1', facecolor='white', edgecolor='none', alpha=0.6))
     
-    # Define filenames for the intermediate and final images
+    os.makedirs('public/images', exist_ok=True)
     temp_filename = f"base_fire_danger_plot.png"
-    
     plt.savefig(temp_filename, bbox_inches='tight', dpi=150)
     plt.close()
 
-    # Step 2: Composite the logo after the plot is rendered.
+    # NWS Logo Composite Logic (Assuming you have nws_logo.png)
     try:
-        # Load the saved plot and the logo
-        base_image = Image.open(temp_filename)
-        # Using the filename of the provided logo
-        logo = Image.open('image_0.png')
-        logo = logo.convert("RGBA") # Ensure alpha transparency is correct
-
-        # Scale the logo. Let's aim for ~200 pixels tall to match the title.
-        logo_height = 200
-        aspect_ratio = logo.size[0] / logo.size[1]
+        from PIL import Image
+        base_img = Image.open(temp_filename)
+        logo = Image.open("nws_logo.png").convert("RGBA")
+        logo_height = 120
+        aspect_ratio = logo.width / logo.height
         logo_width = int(logo_height * aspect_ratio)
-        scaled_logo = logo.resize((logo_width, logo_height))
-
-        # Calculate position for top-right of the visual plot area.
-        # base_image.size gives the width and height of the saved plot.
-        # We place it with a 20px padding from the top edge.
-        logo_x = base_image.size[0] - scaled_logo.size[0] - 20
-        logo_y = 20 
-
-        # Paste the scaled logo over the base image, using the alpha channel as a mask
-        base_image.paste(scaled_logo, (logo_x, logo_y), scaled_logo)
-
-        # Step 3: Save the final composited image to its official location.
-        base_image.save(final_filename)
-
-    except FileNotFoundError:
-        print(f"CRITICAL: Logo file (image_0.png) not found in directory.")
-        # Fallback to saving without logo if needed
-        os.rename(temp_filename, final_filename)
+        logo = logo.resize((logo_width, logo_height))
+        x_offset = base_img.width - logo_width - 20
+        y_offset = 20
+        base_img.paste(logo, (x_offset, y_offset), logo)
+        final_filename = f"public/images/nbm_{scenario}_fire_danger_day{day}.png"
+        base_img.save(final_filename)
+        os.remove(temp_filename)
     except Exception as e:
-        print(f"Error compositing logo: {e}")
-        os.rename(temp_filename, final_filename)
-    finally:
-        # Cleanup the temporary base image
-        if os.path.exists(temp_filename):
-            os.remove(temp_filename)
-            
-# --- 4. MAIN PROCESSING LOOP ---
+        print(f"Logo overlay failed: {e}")
+        os.rename(temp_filename, f"public/images/nbm_{scenario}_fire_danger_day{day}.png")
+
+# --- 4. NBM PROBABILISTIC PROCESSING ---
 def process_nbm():
-    print("--- Hunting for NBM Core Cycles (7-Day Strategic Outlook) ---")
+    print("--- Hunting for NBM Grids ---")
+    base_url = "https://nomads.ncep.noaa.gov/pub/data/nccf/com/blend/prod"
     now = datetime.utcnow()
-    valid_cycle_found = False
+    cycle = f"{now.hour//12 * 12:02d}"
+    date_str = now.strftime('%Y%m%d')
+    url_dir = f"{base_url}/blend.{date_str}/{cycle}/core"
     
-    for hours_back in range(0, 48):
-        check_time = now - timedelta(hours=hours_back)
-        cycle_hour = (check_time.hour // 6) * 6
-        
-        date_str = check_time.strftime("%Y%m%d")
-        hour_str = f"{cycle_hour:02d}"
-        
-        test_url = f"https://noaa-nbm-grib2-pds.s3.amazonaws.com/blend.{date_str}/{hour_str}/core/blend.t{hour_str}z.core.f012.co.grib2"
-        
-        try:
-            if requests.head(test_url, timeout=10).status_code == 200:
-                print(f"Success! Locked onto fresh NBM Core Cycle: {date_str} at {hour_str}Z")
-                valid_cycle_found = True
-                break
-        except: pass 
-
-    if not valid_cycle_found:
-        print("CRITICAL: Could not find any uploaded NBM cycles.")
-        return
-
-    init_time = datetime(check_time.year, check_time.month, check_time.day, cycle_hour, 0)
-    base_url = f"https://noaa-nbm-grib2-pds.s3.amazonaws.com/blend.{date_str}/{hour_str}/core"
-    
-    base_fhr = 21 - cycle_hour
-    if base_fhr < 0: base_fhr += 24
-
-    dss_lines = []
+    init_time = datetime.strptime(f"{date_str}{cycle}", "%Y%m%d%H")
     
     for day in range(1, 8):
-        fhr = base_fhr + (day - 1) * 24
-        file_name = f"blend.t{hour_str}z.core.f{fhr:03d}.co.grib2"
-        file_url = f"{base_url}/{file_name}"
-        datasets = []
+        fhr = day * 24 
+        file_name = f"blend.t{cycle}z.core.f{fhr:03d}.co.grib2"
+        file_url = f"{url_dir}/{file_name}"
         
         try:
-            print(f"Downloading Day {day} (F{fhr:03d})...")
+            print(f"Downloading NBM Day {day} (FHR {fhr})...")
             resp = requests.get(file_url, timeout=30)
-            if resp.status_code != 200: 
-                print(f" -> Day {day} not available.")
+            if resp.status_code == 200:
+                with open(file_name, 'wb') as f:
+                    f.write(resp.content)
+            else:
                 continue
-                
-            with open(file_name, 'wb') as f:
-                f.write(resp.content)
-                
+
             datasets = cfgrib.open_datasets(file_name)
             
-            rh_det = wind_det = gust_det = lats = lons = None
-
+            rh_10 = rh_50 = rh_90 = None
+            wind_10 = wind_50 = wind_90 = None
+            gust_10 = gust_50 = gust_90 = None
+            lats = lons = None
+            
             for d in datasets:
                 if lats is None and 'latitude' in d.coords:
                     lats = d.latitude.values
                     lons = d.longitude.values
-                elif lats is None and 'lat' in d.coords:
-                    lats = d.lat.values
-                    lons = d.lon.values
-
-                for var in d.data_vars:
-                    if var in ['r2', 'rh', '2r', 'rh2m']: rh_det = d[var].values
-                    if var in ['si10', 'wspd', '10si', 'wind']: wind_det = d[var].values
-                    if var in ['gust', 'maxg']: gust_det = d[var].values
-
-            if rh_det is None or wind_det is None:
-                print(f" -> Could not find standard RH/Wind for Day {day}")
-                continue
-
-            if gust_det is None: gust_det = wind_det
-
-            wind_det = ms_to_mph(wind_det)
-            gust_det = ms_to_mph(gust_det)
-
-            # SIMULATE PROPORTIONAL SPREAD
-            rh_10 = np.clip(rh_det * 0.8, 5, 100) 
-            rh_90 = np.clip(rh_det * 1.2, 5, 100) 
-            
-            wind_10 = np.clip(wind_det * 0.6, 0, 100)
-            wind_90 = wind_det * 1.4                  
-            gust_90 = gust_det * 1.4
-
-            # 1. Worst-Case
-            worst_case = calculate_fire_danger(rh_10, wind_90, gust_90)
-            generate_prob_plot(worst_case, lats, lons, day, "worst", "Worst-Case Scenario (Low RH / High Wind)", init_time, fhr)
-            
-            # 2. Expected (Median)
-            median_case = calculate_fire_danger(rh_det, wind_det, gust_det)
-            generate_prob_plot(median_case, lats, lons, day, "median", "Expected Scenario (Median Forecast)", init_time, fhr)
-
-            # 3. Best-Case
-            best_case = calculate_fire_danger(rh_90, wind_10, wind_10)
-            generate_prob_plot(best_case, lats, lons, day, "best", "Best-Case Scenario (High RH / Low Wind)", init_time, fhr)
-
-        # --- AUTOMATED DSS BULLETIN LOGIC ---
-            valid_time = init_time + timedelta(hours=fhr) 
-            
-            lons_180 = np.where(lons > 180, lons - 360, lons)
-            nc_mask = (lats >= lat_min) & (lats <= lat_max) & (lons_180 >= lon_min) & (lons_180 <= lon_max)
-            
-            max_median = np.max(median_case[nc_mask])
-            max_worst = np.max(worst_case[nc_mask])
-            
-            day_name = valid_time.strftime('%A, %b %d')
-
-            # EXCEPTION-BASED REPORTING: Only generate text if there is a threat
-            if max_median == 0 and max_worst == 0:
-                pass # Completely green day, skip adding it to the bulletin
-            else:
-                if max_median == 4:
-                    status = f"<strong>Day {day} ({day_name}): EXTREME (PDS Red Flag Threat).</strong> Expected forecast reaches extreme criteria with critically low RH and gusty winds."
-                elif max_median == 3:
-                    status = f"<strong>Day {day} ({day_name}): High (Red Flag Threat).</strong> Expected forecast reaches RFW criteria during peak heating."
-                    if max_worst == 4:
-                        status += " <em>Note: The worst-case scenario shows localized EXTREME fire behavior is possible if winds overperform.</em>"
-                elif max_median == 2:
-                    status = f"<strong>Day {day} ({day_name}): Mod (IFD).</strong> Expected forecast reaches Increased Fire Danger criteria."
-                    if max_worst >= 3:
-                        status += " <em>Note: The worst-case scenario shows localized Red Flag conditions are possible if the environment trends drier/windier.</em>"
-                elif max_median == 1:
-                    status = f"<strong>Day {day} ({day_name}): Low.</strong> Breezy and dry conditions possible, but generally remaining below IFD thresholds."
-                    if max_worst >= 2:
-                        status += " <em>Note: The worst-case scenario shows IFD conditions cannot be completely ruled out.</em>"
-                else:
-                    # Handles cases where median is Green, but Worst-Case implies a threat
-                    status = f"<strong>Day {day} ({day_name}): None.</strong> Peak heating expected conditions are below thresholds."
-                    if max_worst >= 1:
-                        status += " <em>Note: The worst-case scenario indicates localized Low/Elevated conditions cannot be entirely ruled out.</em>"
                 
-                dss_lines.append(f"<li>{status}</li>")
-            
+                for var in d.data_vars:
+                    if 'minrhi' in var:
+                        rh_10 = d[var].values if d[var].percentile == 10 else rh_10
+                        rh_50 = d[var].values if d[var].percentile == 50 else rh_50
+                        rh_90 = d[var].values if d[var].percentile == 90 else rh_90
+                    elif '10si' in var and 'wind' in d[var].attrs.get('GRIB_name', '').lower():
+                        wind_10 = d[var].values * 2.23694 if d[var].percentile == 10 else wind_10
+                        wind_50 = d[var].values * 2.23694 if d[var].percentile == 50 else wind_50
+                        wind_90 = d[var].values * 2.23694 if d[var].percentile == 90 else wind_90
+                    elif '10si' in var and 'gust' in d[var].attrs.get('GRIB_name', '').lower():
+                        gust_10 = d[var].values * 2.23694 if d[var].percentile == 10 else gust_10
+                        gust_50 = d[var].values * 2.23694 if d[var].percentile == 50 else gust_50
+                        gust_90 = d[var].values * 2.23694 if d[var].percentile == 90 else gust_90
+
+            if None not in [rh_10, wind_90]:
+                worst_case = calculate_fire_danger(rh_10, wind_90, gust_90 if gust_90 is not None else wind_90)
+                median_case = calculate_fire_danger(rh_50, wind_50, gust_50 if gust_50 is not None else wind_50)
+                best_case = calculate_fire_danger(rh_90, wind_10, gust_10 if gust_10 is not None else wind_10)
+
+                generate_prob_plot(worst_case, lats, lons, day, "worst", "NBM Worst-Case Scenario", init_time, fhr)
+                generate_prob_plot(median_case, lats, lons, day, "median", "NBM Expected Scenario (Median)", init_time, fhr)
+                generate_prob_plot(best_case, lats, lons, day, "best", "NBM Best-Case Scenario", init_time, fhr)
+
+                # --- RECORD NBM WORST-CASE SCORE ---
+                valid_time = init_time + timedelta(hours=fhr) 
+                lons_180 = np.where(lons > 180, lons - 360, lons)
+                nc_mask = (lats >= LAT_MIN) & (lats <= LAT_MAX) & (lons_180 >= LON_MIN) & (lons_180 <= LON_MAX)
+                
+                dss_data[day]['nbm_worst'] = int(np.max(worst_case[nc_mask]))
+                dss_data[day]['date_str'] = valid_time.strftime('%A, %b %d')
+
         except Exception as e:
-            print(f"Error processing Day {day}: {e}")
+            print(f"Error processing NBM Day {day}: {e}")
             
         finally:
             for d in datasets:
@@ -341,43 +230,14 @@ def process_nbm():
                 try: os.remove(junk)
                 except: pass
 
-    # --- SAVE THE DSS BULLETIN WITH TIMESTAMP ---
-    from zoneinfo import ZoneInfo
-    # Fetch the exact time the Action runs, localized to Eastern Time
-    now_time = datetime.now(ZoneInfo("America/New_York")).strftime('%A, %B %d, %Y at %I:%M %p %Z')
-    
-    # NEW: Save just the timestamp to a text file for the top of the website
-    with open('public/timestamp.txt', 'w') as f:
-        f.write(f"Last Refreshed: {now_time}")
-    
-    with open('public/dss_bulletin.html', 'w') as f:
-        # Add the Timestamp to the top of the DSS box
-        f.write(f"<p style='color: #0056b3; font-weight: bold; text-align: left; margin-top: 0; border-bottom: 1px solid #ddd; padding-bottom: 8px;'>Data Last Refreshed: {now_time}</p>\n")
-        
-        # If all 7 days were green, output an "All Clear" message
-        if len(dss_lines) == 0:
-            f.write("<p style='text-align: left; font-weight: bold; color: #2e7d32; padding: 10px 0;'>No elevated fire weather threats expected over the next 7 days.</p>\n")
-        else:
-            f.write("<ul style='text-align: left; line-height: 1.6;'>\n" + "\n".join(dss_lines) + "\n</ul>\n")
-            
-        f.write("<p style='font-size: 12px; color: gray; text-align: left; margin-top: 15px;'><em>*Disclaimer: This automated guidance evaluates meteorological conditions only and does not account for local fuel moisture (ERC). Consult official NWS forecasts for operational decisions.</em></p>")
-
 # --- 5. NDFD OFFICIAL FORECAST PROCESSING ---
 def process_ndfd():
-    import warnings
-    import pandas as pd
-    from zoneinfo import ZoneInfo
-    from datetime import datetime, timedelta, timezone
-    
     print("--- Hunting for Official NWS NDFD Grids ---")
-    
     base_url = "https://tgftp.nws.noaa.gov/SL.us008001/ST.opnl/DF.gr2/DC.ndfd/AR.conus"
     periods = ["VP.001-003", "VP.004-007"]
     variables = ["ds.minrh.bin", "ds.wspd.bin", "ds.wgust.bin"]
-    
     now_local = datetime.now(ZoneInfo("America/New_York"))
     
-    # STEP 1: Download ALL files first and dump them into a bucket to avoid file boundary gaps!
     all_datasets = {'minrh': [], 'wspd': [], 'wgust': []}
     lats = lons = None
     
@@ -385,38 +245,27 @@ def process_ndfd():
         for var_file in variables:
             file_url = f"{base_url}/{period}/{var_file}"
             local_file = f"ndfd_{period}_{var_file}"
-            
             try:
                 resp = requests.get(file_url, timeout=30)
                 if resp.status_code == 200:
                     with open(local_file, 'wb') as f:
                         f.write(resp.content)
-                    
                     datasets = cfgrib.open_datasets(local_file)
-                    var_key = var_file.split('.')[1] # Extracts 'minrh', 'wspd', or 'wgust'
-                    
+                    var_key = var_file.split('.')[1]
                     for d in datasets:
                         if lats is None and 'latitude' in d.coords:
                             lats = d.latitude.values
                             lons = d.longitude.values
                         all_datasets[var_key].append(d)
             except Exception as e:
-                pass # Skip silently if a specific slice is unavailable
+                pass 
 
-    # STEP 2: Loop through the 7 days and extract by strict UTC time window
     for day in range(1, 8):
         target_date = (now_local + timedelta(days=day-1)).date()
-        
-        # We only want grids valid during the "Peak Heating" window for the target date:
-        # 12Z (8 AM EDT) through 06Z the next morning (2 AM EDT). 
-        # This catches the afternoon winds and the 00Z Min RH grid perfectly!
         window_start = datetime(target_date.year, target_date.month, target_date.day, 12, 0, tzinfo=timezone.utc)
         window_end = window_start + timedelta(hours=18)
         
-        daily_rh_list = []
-        daily_wind_list = []
-        daily_gust_list = []
-        
+        daily_rh_list, daily_wind_list, daily_gust_list = [], [], []
         print(f"Processing NDFD Official Forecast for Day {day} ({target_date})...")
         
         try:
@@ -433,50 +282,44 @@ def process_ndfd():
                                 vals = da.values
                                 
                             for i, vt in enumerate(vtimes):
-                                # Convert GRIB valid time to UTC timezone-aware datetime
                                 vt_utc = pd.to_datetime(vt).tz_localize('UTC')
-                                
-                                # ISOLATE: Does this grid fall inside our daytime window?
                                 if window_start <= vt_utc <= window_end:
                                     if var_key == 'minrh': daily_rh_list.append(vals[i])
                                     elif var_key == 'wspd': daily_wind_list.append(vals[i])
                                     elif var_key == 'wgust': daily_gust_list.append(vals[i])
 
-            # Math & Plotting
             if daily_rh_list and daily_wind_list:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore", category=RuntimeWarning)
                     daily_rh = np.nanmin(np.array(daily_rh_list), axis=0)
                     daily_wind = np.nanmax(np.array(daily_wind_list), axis=0)
-                    
-                    if daily_gust_list:
-                        daily_gust = np.nanmax(np.array(daily_gust_list), axis=0)
-                    else:
-                        daily_gust = daily_wind
+                    if daily_gust_list: daily_gust = np.nanmax(np.array(daily_gust_list), axis=0)
+                    else: daily_gust = daily_wind
                         
                 daily_wind_mph = daily_wind * 2.23694
                 daily_gust_mph = daily_gust * 2.23694
-                
                 official_case = calculate_fire_danger(daily_rh, daily_wind_mph, daily_gust_mph)
+                
+                # --- RECORD NDFD SCORE ---
+                lons_180 = np.where(lons > 180, lons - 360, lons)
+                nc_mask = (lats >= LAT_MIN) & (lats <= LAT_MAX) & (lons_180 >= LON_MIN) & (lons_180 <= LON_MAX)
+                dss_data[day]['ndfd'] = int(np.max(official_case[nc_mask]))
+                
                 plot_time_utc = datetime(target_date.year, target_date.month, target_date.day, 21, 0)
                 generate_prob_plot(official_case, lats, lons, day, "official", "Official NWS Forecast (NDFD)", plot_time_utc, 0)
-                
             else:
-                # --- NEW: ANTI-CRASH FALLBACK ---
-                # Generate a safe, blank map so the HTML dropdown doesn't show a broken image!
                 print(f" -> No daytime data left on server for Day {day}. Generating safe blank map.")
+                dss_data[day]['ndfd'] = 0 # Force score to 0 for expired maps
                 if lats is not None:
-                    dummy_rh = np.ones_like(lats) * 100  # Force 100% RH
-                    dummy_wind = np.zeros_like(lats)     # Force 0 mph Wind
+                    dummy_rh = np.ones_like(lats) * 100 
+                    dummy_wind = np.zeros_like(lats)    
                     empty_case = calculate_fire_danger(dummy_rh, dummy_wind, dummy_wind)
-                    
                     plot_time_utc = datetime(target_date.year, target_date.month, target_date.day, 21, 0)
                     generate_prob_plot(empty_case, lats, lons, day, "official", "Official Forecast (NDFD) - DAY EXPIRED", plot_time_utc, 0)
                 
         except Exception as e:
             print(f"Error processing NDFD Day {day}: {e}")
 
-    # STEP 3: Clean up all files and memory
     for ds_list in all_datasets.values():
         for d in ds_list:
             try: d.close()
@@ -485,6 +328,53 @@ def process_ndfd():
         try: os.remove(junk)
         except: pass
 
+# --- 6. GENERATE FINAL DSS BULLETIN ---
+def generate_dss_bulletin():
+    print("--- Generating Unified DSS Text Bulletin ---")
+    dss_lines = []
+    
+    for day in range(1, 8):
+        ndfd_lvl = dss_data[day]['ndfd']
+        worst_lvl = dss_data[day]['nbm_worst']
+        day_name = dss_data[day]['date_str']
+        
+        if not day_name: continue 
+        if ndfd_lvl == 0 and worst_lvl == 0: continue 
+        
+        if ndfd_lvl == 4:
+            status = f"<strong>Day {day} ({day_name}): EXTREME (Official).</strong> Official NWS forecast expects extreme criteria with critically low RH and damaging winds."
+        elif ndfd_lvl == 3:
+            status = f"<strong>Day {day} ({day_name}): High / RFW (Official).</strong> Official NWS forecast reaches Red Flag Warning criteria."
+            if worst_lvl == 4: status += " <em>Note: The worst-case scenario shows localized EXTREME fire behavior is possible.</em>"
+        elif ndfd_lvl == 2:
+            status = f"<strong>Day {day} ({day_name}): Mod / IFD (Official).</strong> Official NWS forecast reaches Increased Fire Danger criteria."
+            if worst_lvl >= 3: status += " <em>Note: The worst-case scenario shows potential for localized Red Flag conditions if winds overperform.</em>"
+        elif ndfd_lvl == 1:
+            status = f"<strong>Day {day} ({day_name}): Low (Official).</strong> Breezy and dry conditions expected, but official forecast remains below IFD thresholds."
+            if worst_lvl >= 2: status += " <em>Note: The worst-case scenario indicates IFD or Red Flag conditions cannot be completely ruled out.</em>"
+        else:
+            status = f"<strong>Day {day} ({day_name}): Expected None.</strong> Official forecast remains below elevated thresholds."
+            if worst_lvl >= 2: status += " <em>Note: The worst-case scenario indicates localized elevated conditions (IFD) cannot be entirely ruled out.</em>"
+            elif worst_lvl == 1: status += " <em>Note: The worst-case scenario indicates localized Low fire danger is possible.</em>"
+            
+        dss_lines.append(f"<li>{status}</li>")
+
+    now_time = datetime.now(ZoneInfo("America/New_York")).strftime('%A, %B %d, %Y at %I:%M %p %Z')
+    
+    with open('public/timestamp.txt', 'w') as f:
+        f.write(f"Last Refreshed: {now_time}")
+        
+    with open('public/dss_bulletin.html', 'w') as f:
+        f.write(f"<p style='color: #0056b3; font-weight: bold; text-align: left; margin-top: 0; border-bottom: 1px solid #ddd; padding-bottom: 8px;'>Data Last Refreshed: {now_time}</p>\n")
+        
+        if len(dss_lines) == 0:
+            f.write("<p style='text-align: left; font-weight: bold; color: #2e7d32; padding: 10px 0;'>No elevated fire weather threats expected over the next 7 days.</p>\n")
+        else:
+            f.write("<ul style='text-align: left; line-height: 1.6;'>\n" + "\n".join(dss_lines) + "\n</ul>\n")
+            
+        f.write("<p style='font-size: 12px; color: gray; text-align: left; margin-top: 15px;'><em>*Disclaimer: This automated guidance evaluates meteorological conditions only and does not account for local fuel moisture (ERC). Consult official NWS forecasts for operational decisions.</em></p>")
+
 if __name__ == "__main__":
     process_nbm()
     process_ndfd()
+    generate_dss_bulletin()
