@@ -231,10 +231,10 @@ def process_nbm():
     if base_fhr < 0: base_fhr += 24
     
     # NOMADS grib_filter requires 0-360 longitudes. We add a 1-degree buffer around NC.
-    nomads_left = 360 + LON_MIN - 1.0
-    nomads_right = 360 + LON_MAX + 1.0
-    nomads_top = LAT_MAX + 1.0
-    nomads_bottom = LAT_MIN - 1.0
+    nomads_left = 360 + lon_min - 1.0
+    nomads_right = 360 + lon_max + 1.0
+    nomads_top = lat_max + 1.0
+    nomads_bottom = lat_min - 1.0
     
     for day in range(1, 8):
         fhr = base_fhr + (day - 1) * 24
@@ -318,7 +318,7 @@ def process_nbm():
             # --- RECORD NBM WORST-CASE SCORE TO THE NEW SCOREBOARD ---
             valid_time = init_time + timedelta(hours=fhr) 
             lons_180 = np.where(lons > 180, lons - 360, lons)
-            nc_mask = (lats >= LAT_MIN) & (lats <= LAT_MAX) & (lons_180 >= LON_MIN) & (lons_180 <= LON_MAX)
+            nc_mask = (lats >= lat_min) & (lats <= lat_max) & (lons_180 >= lon_min) & (lons_180 <= lon_max)
             
             dss_data[day]['nbm_worst'] = int(np.max(worst_case[nc_mask]))
             dss_data[day]['date_str'] = valid_time.strftime('%A, %b %d')
