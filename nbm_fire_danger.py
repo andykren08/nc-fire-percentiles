@@ -242,11 +242,10 @@ def process_nbm():
         fhr = base_fhr + (day - 1) * 24
         file_name = f"blend.t{hour_str}z.qmd.f{fhr:03d}.co.grib2"
         
-        # FIXED FILTER: 'all_lev' prevents deleting data, and we explicitly ask for MINRH
+       # FIXED FILTER: Grab all variables, but restrict it geographically to NC!
         filter_url = (
             f"https://nomads.ncep.noaa.gov/cgi-bin/filter_blend.pl"
-            f"?file={file_name}&all_lev=on"
-            f"&var_GUST=on&var_RH=on&var_MINRH=on&var_WIND=on&var_WSPD=on"
+            f"?file={file_name}&all_lev=on&all_var=on"
             f"&subregion=on&leftlon={nomads_left}&rightlon={nomads_right}"
             f"&toplat={nomads_top}&bottomlat={nomads_bottom}"
             f"&dir=%2Fblend.{date_str}%2F{hour_str}%2Fqmd"
@@ -256,8 +255,10 @@ def process_nbm():
             print(f"Downloading NBM QMD Day {day} (F{fhr:03d}) via NOMADS grib_filter...")
             resp = requests.get(filter_url, timeout=60)
             
+            # If the file is too small, it's an HTML error page from NOMADS
             if resp.status_code != 200 or len(resp.content) < 1000: 
                 print(f" -> Day {day} unavailable on NOMADS or filter blocked.")
+                print(f" -> NOMADS Message: {resp.text[:250]}") # Shows us the exact error!
                 continue
                 
             with open(file_name, 'wb') as f:
