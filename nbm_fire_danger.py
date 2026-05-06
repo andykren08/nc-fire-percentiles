@@ -69,6 +69,15 @@ def calculate_fire_danger(rh, wind, gust):
 def ms_to_mph(ms):
     return ms * 2.23694
 
+def get_regional_max(danger_grid, mask, min_pixels=10):
+    """Prevents single noisy pixels from triggering state-wide alarms."""
+    masked_grid = danger_grid[mask]
+    for level in [4, 3, 2, 1]:
+        # If at least 10 pixels hit this threat level, it's real.
+        if np.sum(masked_grid == level) >= min_pixels:
+            return level
+    return 0
+
 # --- 3. MAPPING ---
 def generate_prob_plot(plot_data, lats, lons, day, scenario, title_text, init_time, fhr):
     # Import PIL for image compositing (must be imported within the function)
@@ -318,11 +327,17 @@ def process_nbm():
             best_case = calculate_fire_danger(rh_90, wind_10, gust_10)
             generate_prob_plot(best_case, lats, lons, day, "best", "Best-Case (90% RH / 10% Wind)", init_time, fhr)
 
+            # --- RECORD NBM WORST-CASE SCORE TO SCOREBOARD ---
             valid_time = init_time + timedelta(hours=fhr) 
             lons_180 = np.where(lons > 180, lons - 360, lons)
-            nc_mask = (lats >= lat_min) & (lats <= lat_max) & (lons_180 >= lon_min) & (lons_180 <= lon_max)
             
-            dss_data[day]['nbm_worst'] = int(np.max(worst_case[nc_mask]))
+            # TIGHT NC SCORING BOX (Ignores VA, SC, and deep Ocean)
+            score_lat_min, score_lat_max = 33.8, 36.6
+            score_lon_min, score_lon_max = -84.4, -75.4
+            nc_mask = (lats >= score_lat_min) & (lats <= score_lat_max) & (lons_180 >= score_lon_min) & (lons_180 <= score_lon_max)
+            
+            # Use the Noise Filter instead of np.max()
+            dss_data[day]['nbm_worst'] = get_regional_max(worst_case, nc_mask, min_pixels=10)
             dss_data[day]['date_str'] = valid_time.strftime('%A, %b %d')
 
         except Exception as e:
@@ -432,8 +447,14 @@ def process_ndfd():
                 
                 # --- RECORD NDFD SCORE ---
                 lons_180 = np.where(lons > 180, lons - 360, lons)
-                nc_mask = (lats >= lat_min) & (lats <= lat_max) & (lons_180 >= lon_min) & (lons_180 <= lon_max)
-                dss_data[day]['ndfd'] = int(np.max(official_case[nc_mask]))
+                
+                # TIGHT NC SCORING BOX (Ignores VA, SC, and deep Ocean)
+                score_lat_min, score_lat_max = 33.8, 36.6
+                score_lon_min, score_lon_max = -84.4, -75.4
+                nc_mask = (lats >= score_lat_min) & (lats <= score_lat_max) & (lons_180 >= score_lon_min) & (lons_180 <= score_lon_max)
+                
+                # Use the Noise Filter instead of np.max()
+                dss_data[day]['ndfd'] = get_regional_max(official_case, nc_mask, min_pixels=10)
                 
                 plot_time_utc = datetime(target_date.year, target_date.month, target_date.day, 21, 0)
                 generate_prob_plot(official_case, lats, lons, day, "official", "Official NWS Forecast (NDFD)", plot_time_utc, 0)
