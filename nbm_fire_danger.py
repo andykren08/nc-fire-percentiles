@@ -491,9 +491,13 @@ def process_ndfd():
 def generate_dss_bulletin():
     from zoneinfo import ZoneInfo
     from datetime import datetime
+    import matplotlib.pyplot as plt
+    import textwrap
+    import re
     
     print("--- Generating Unified DSS Text Bulletin ---")
     dss_lines = []
+    pt_lines = [] # Plain text strings for the image generator
     
     for day in range(1, 8):
         ndfd_lvl = dss_data[day]['ndfd']
@@ -515,11 +519,14 @@ def generate_dss_bulletin():
             status = f"<strong>Day {day} ({day_name}): Low (Official).</strong> Breezy and dry conditions expected, but official forecast remains below IFD thresholds."
             if worst_lvl >= 2: status += " <em>Note: The worst-case scenario indicates IFD or Red Flag conditions cannot be completely ruled out.</em>"
         else:
-            status = f"<strong>Day {day} ({day_name}): Expected None.</strong> Official forecast remains below elevated thresholds."
+            status = f"<strong>Day {day} ({day_name}): None.</strong> Official forecast remains below elevated thresholds."
             if worst_lvl >= 2: status += " <em>Note: The worst-case scenario indicates localized elevated conditions (IFD) cannot be entirely ruled out.</em>"
             elif worst_lvl == 1: status += " <em>Note: The worst-case scenario indicates localized Low fire danger is possible.</em>"
             
         dss_lines.append(f"<li>{status}</li>")
+        
+        # Strip out the HTML tags (like <strong>) so it renders cleanly on the image
+        pt_lines.append(re.sub(r'<[^>]+>', '', status))
 
     now_time = datetime.now(ZoneInfo("America/New_York")).strftime('%A, %B %d, %Y at %I:%M %p %Z')
     
@@ -535,6 +542,38 @@ def generate_dss_bulletin():
             f.write("<ul style='text-align: left; line-height: 1.6;'>\n" + "\n".join(dss_lines) + "\n</ul>\n")
             
         f.write("<p style='font-size: 12px; color: gray; text-align: left; margin-top: 15px;'><em>*Disclaimer: This automated guidance evaluates meteorological conditions only and does not account for local fuel moisture (ERC). Consult official NWS forecasts for operational decisions.</em></p>")
+
+    # --- NEW: GENERATE THE DSS BULLETIN PNG IMAGE ---
+    print("--- Generating DSS Bulletin PNG Image ---")
+    fig, ax = plt.subplots(figsize=(11, 7))
+    ax.axis('off') # Hide the chart grid/axes
+    fig.patch.set_facecolor('white')
+
+    y_pos = 0.95
+    
+    # Title & Timestamp
+    plt.text(0.02, y_pos, "7-Day Fire Weather Planning Summary", fontsize=18, fontweight='bold', ha='left', va='top', transform=ax.transAxes)
+    y_pos -= 0.06
+    plt.text(0.02, y_pos, f"Data Last Refreshed: {now_time}", fontsize=12, color='#0056b3', ha='left', va='top', transform=ax.transAxes)
+    y_pos -= 0.10
+
+    # Body Text
+    if len(pt_lines) == 0:
+        plt.text(0.02, y_pos, "No elevated fire weather threats expected over the next 7 days.", fontsize=14, color='#2e7d32', fontweight='bold', ha='left', va='top', transform=ax.transAxes)
+    else:
+        for line in pt_lines:
+            wrapped_line = textwrap.fill("• " + line, width=100) # Prevents text from running off the page
+            plt.text(0.02, y_pos, wrapped_line, fontsize=13, ha='left', va='top', transform=ax.transAxes)
+            y_pos -= 0.05 * (wrapped_line.count('\n') + 1.5)
+
+    y_pos -= 0.05
+    
+    # Footer
+    plt.text(0.02, y_pos, "*Disclaimer: This automated guidance evaluates meteorological conditions only and does not account\nfor local fuel moisture (ERC). Consult official NWS forecasts for operational decisions.", fontsize=10, fontstyle='italic', color='gray', ha='left', va='top', transform=ax.transAxes)
+
+    # Save as PNG
+    plt.savefig('public/images/dss_bulletin.png', bbox_inches='tight', dpi=150, facecolor=fig.get_facecolor(), edgecolor='none')
+    plt.close()
 
 if __name__ == "__main__":
     process_nbm()
